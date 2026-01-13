@@ -85,14 +85,14 @@ cron.schedule('0 10 * * *', async () => {
 
 // --- 5. MAIN CHAT LOGIC ---
 // --- NEW UNIVERSAL LISTENER (DMs + Mentions) ---
+// --- ROBUST LISTENER (Manual Parsing) ---
 app.message(async ({ message, say }) => {
-  // Ignore messages from other bots (prevents infinite loops)
+  // 1. Ignore other bots
   if (message.subtype === 'bot_message') return;
-
   console.log(`Processing: ${message.text}`);
 
   try {
-    // 1. Start Chat
+    // 2. Start Chat
     const chat = model.startChat({
       history: [{ role: "user", parts: [{ text: SYSTEM_PROMPT }] }],
       tools: [{
@@ -103,29 +103,45 @@ app.message(async ({ message, say }) => {
       }]
     });
 
-    // 2. Get AI Response
+    // 3. Send Message to Gemini
     const result = await chat.sendMessage(message.text);
-    const call = result.response.functionCalls()?.[0];
+    const response = await result.response; // Wait for the response object
+    
+    // --- THE FIX: Manually find the function call in the data ---
+    const candidates = response.candidates;
+    const parts = candidates ? candidates[0].content.parts : [];
+    const functionCallPart = parts.find(part => part.functionCall);
 
-    // 3. Handle Tool Calls
-    if (call) {
+    // 4. Handle Tool Calls
+    if (functionCallPart) {
+      const call = functionCallPart.functionCall; // Extract the raw call
+      
       let toolResult = "";
       if (call.name === "get_prs") {
         await say("👀 Checking GitHub...");
         toolResult = await getPullRequests();
       } else if (call.name === "create_ticket") {
-        await say("📝 Updating Jira...");
+        await say(`📝 Updating Jira with task: ${call.args.summary}...`);
         toolResult = await createJiraTask(call.args.summary);
       }
       
-      const result2 = await chat.sendMessage([{ functionResponse: { name: call.name, response: { output: toolResult } } }]);
+      // 5. Send result back to Gemini
+      const result2 = await chat.sendMessage([
+        {
+          functionResponse: {
+            name: call.name,
+            response: { output: toolResult }
+          }
+        }
+      ]);
       await say(result2.response.text());
     } else {
-      // Normal Reply
-      await say(result.response.text());
+      // No tool needed, just reply text
+      await say(response.text());
     }
+
   } catch (error) {
-    console.error(error);
+    console.error("CRASH REPORT:", error);
     await say(`I crashed. Error: ${error.message}`);
   }
 });
