@@ -3,27 +3,19 @@ const { App } = require('@slack/bolt');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { Octokit } = require("octokit");
 const JiraClient = require("jira-client");
-const cron = require('node-cron');
 const fs = require('fs');
 
-// --- 1. CONFIGURATION ---
+// --- CONFIGURATION ---
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
   signingSecret: process.env.SLACK_SIGNING_SECRET,
   socketMode: true,
   appToken: process.env.SLACK_APP_TOKEN
 });
-// --- DEBUG SNIFFER ---
-// This prints ANY event Slack sends to the console
-app.use(async ({ logger, body, next }) => {
-  console.log(`📨 PACKET RECEIVED: Type=${body.event?.type}, Text='${body.event?.text}'`);
-  await next();
-});
+
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
-
 const jira = new JiraClient({
   protocol: 'https',
   host: process.env.JIRA_HOST,
@@ -33,9 +25,11 @@ const jira = new JiraClient({
   strictSSL: true
 });
 
-let memory = JSON.parse(fs.readFileSync('memory.json', 'utf8'));
+// --- MEMORY STORAGE ---
+// Format: { 'channel_id': [ { role: 'user', parts: [...] }, ... ] }
+const CONVERSATIONS = {};
 
-// --- 2. TOOLS ---
+// --- TOOLS ---
 async function getPullRequests() {
   try {
     const { data } = await octokit.rest.pulls.list({
@@ -44,7 +38,7 @@ async function getPullRequests() {
       state: 'open'
     });
     if (data.length === 0) return "No open PRs found.";
-    return data.map(pr => `- #${pr.number}: ${pr.title} (${pr.user.login})`).join("\n");
+    return data.map(pr => `- #${pr.number}: ${pr.title} (by ${pr.user.login})`).join("\n");
   } catch (error) { return `GitHub Error: ${error.message}`; }
 }
 
@@ -57,48 +51,41 @@ async function createJiraTask(summary) {
         issuetype: { name: 'Task' }
       }
     });
-    return `Created Jira Ticket ${issue.key}`;
+    return `Created Jira Ticket ${issue.key}: https://${process.env.JIRA_HOST}/browse/${issue.key}`;
   } catch (error) { return `Jira Error: ${error.message}`; }
 }
 
-// --- 3. SYSTEM PROMPT ---
-const SYSTEM_PROMPT = `
-You are Shehab, the PM for 'Lab Manager'. 
-Current Goal: ${memory.sprint_goal}.
-Tone: Direct, pragmatic, concise. You are the boss.
-Tools: Use 'get_prs' for code checks. Use 'create_ticket' for new tasks.
-`;
-
-// --- 4. CRON JOB (Daily Standup at 10 AM) ---
-cron.schedule('0 10 * * *', async () => {
-    try {
-        const CHANNEL_ID = process.env.SLACK_CHANNEL_ID; 
-        const chat = model.startChat();
-        const msg = await chat.sendMessage(SYSTEM_PROMPT + " It is 10 AM. Ask for a brief standup.");
-        await app.client.chat.postMessage({
-            token: process.env.SLACK_BOT_TOKEN,
-            channel: CHANNEL_ID,
-            text: msg.response.text()
-        });
-    } catch (e) { console.error("Cron failed", e); }
-});
-
-// --- 5. MAIN CHAT LOGIC ---
-// --- THE "HUNTER" LISTENER ---
+// --- MAIN BOT LOGIC ---
 app.message(async ({ message, say }) => {
-  if (message.subtype === 'bot_message') return;
-  console.log(`Processing: ${message.text}`);
+  if (message.subtype === 'bot_message') return; // Ignore self
+  console.log(`Processing from ${message.user}: ${message.text}`);
+
+  // 1. Context ID (Use Thread TS if available, otherwise Channel ID)
+  // This ensures he remembers the specific thread or DM conversation.
+  const contextId = message.thread_ts || message.channel;
+
+  // 2. Load History (or create empty)
+  let history = CONVERSATIONS[contextId] || [];
+
+  // Limit memory to last 10 turns to prevent crashing
+  if (history.length > 20) history = history.slice(history.length - 20);
 
   try {
-    // 1. Strict Prompt
-    const STRICT_PROMPT = `
-    You are Marcus, the Project Manager.
-    Tools: 'get_prs' (GitHub) and 'create_ticket' (Jira).
-    IMPORTANT: You must triggers the tools. Do not just print the function name.
-    `;
+    // 3. Define the System Prompt (Always injected fresh)
+    const SYSTEM_PROMPT = {
+      role: "user",
+      parts: [{ text: `
+        You are Shehab, the Project Manager.
+        Tools: 'get_prs' (GitHub) and 'create_ticket' (Jira).
+        CONTEXT: You are in a Slack chat.
+        CRITICAL: If asked to create a task, YOU MUST USE THE TOOL.
+        If you cannot use the tool, format your answer exactly like this: create_ticket("Task Name Here")
+      `}]
+    };
 
+    // 4. Start Chat with History
     const chat = model.startChat({
-      history: [{ role: "user", parts: [{ text: STRICT_PROMPT }] }],
+      history: [SYSTEM_PROMPT, ...history], // Inject Prompt + Past Memory
       tools: [{
           functionDeclarations: [
             { name: "get_prs", description: "Get GitHub PRs" },
@@ -107,46 +94,60 @@ app.message(async ({ message, say }) => {
       }]
     });
 
+    // 5. Send Message
     const result = await chat.sendMessage(message.text);
     const response = await result.response;
     const textResponse = response.text();
 
-    // 2. Check for Native Tool Call
+    // 6. SAVE MEMORY (User's question)
+    history.push({ role: "user", parts: [{ text: message.text }] });
+
+    // --- TOOL HANDLING (Hunter Logic) ---
     const functionCallPart = response.candidates?.[0]?.content?.parts?.find(p => p.functionCall);
+    let finalReply = textResponse;
 
     if (functionCallPart) {
-      // --- NATIVE TOOL USE ---
+      // Native Tool Use
       const call = functionCallPart.functionCall;
       if (call.name === "get_prs") {
         await say("👀 Checking GitHub...");
         const data = await getPullRequests();
+        finalReply = data;
         await say(data);
       } else if (call.name === "create_ticket") {
         await say("📝 Writing to Jira...");
         const data = await createJiraTask(call.args.summary);
+        finalReply = data;
         await say(data);
       }
     } 
-    // 3. FAILSAFE: Regex Hunt (Catches 'create_ticket("...")')
-    else if (textResponse.includes("create_ticket")) {
-        // Extract content between quotes: create_ticket("THIS PART")
+    else if (textResponse.includes('create_ticket')) {
+        // Regex Fix
         const match = textResponse.match(/create_ticket\s*\(\s*["'](.*?)["']\s*\)/);
         if (match && match[1]) {
             await say(`⚠️ (Auto-Fix) Creating task: "${match[1]}"...`);
             const data = await createJiraTask(match[1]);
+            finalReply = data;
             await say(data);
         } else {
             await say(textResponse);
         }
     }
-    else if (textResponse.includes("get_prs")) {
+    else if (textResponse.includes('get_prs')) {
          await say("⚠️ (Auto-Fix) Checking GitHub...");
          const data = await getPullRequests();
+         finalReply = data;
          await say(data);
     } 
     else {
+      // Normal Chat
       await say(textResponse);
     }
+
+    // 7. SAVE MEMORY (Bot's Reply)
+    // We save the final reply so he remembers what he said/did
+    history.push({ role: "model", parts: [{ text: finalReply }] });
+    CONVERSATIONS[contextId] = history; // Update global store
 
   } catch (error) {
     console.error(error);
@@ -154,4 +155,4 @@ app.message(async ({ message, say }) => {
   }
 });
 
-(async () => { await app.start(); console.log('⚡️ Shehab is Online'); })();
+(async () => { await app.start(); console.log('⚡️ Shehab (with Memory) is Online'); })();
