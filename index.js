@@ -84,8 +84,15 @@ cron.schedule('0 10 * * *', async () => {
 });
 
 // --- 5. MAIN CHAT LOGIC ---
-app.event('app_mention', async ({ event, say }) => {
+// --- NEW UNIVERSAL LISTENER (DMs + Mentions) ---
+app.message(async ({ message, say }) => {
+  // Ignore messages from other bots (prevents infinite loops)
+  if (message.subtype === 'bot_message') return;
+
+  console.log(`Processing: ${message.text}`);
+
   try {
+    // 1. Start Chat
     const chat = model.startChat({
       history: [{ role: "user", parts: [{ text: SYSTEM_PROMPT }] }],
       tools: [{
@@ -96,9 +103,11 @@ app.event('app_mention', async ({ event, say }) => {
       }]
     });
 
-    const result = await chat.sendMessage(event.text);
+    // 2. Get AI Response
+    const result = await chat.sendMessage(message.text);
     const call = result.response.functionCalls()?.[0];
 
+    // 3. Handle Tool Calls
     if (call) {
       let toolResult = "";
       if (call.name === "get_prs") {
@@ -112,6 +121,7 @@ app.event('app_mention', async ({ event, say }) => {
       const result2 = await chat.sendMessage([{ functionResponse: { name: call.name, response: { output: toolResult } } }]);
       await say(result2.response.text());
     } else {
+      // Normal Reply
       await say(result.response.text());
     }
   } catch (error) {
