@@ -13,7 +13,12 @@ const app = new App({
   socketMode: true,
   appToken: process.env.SLACK_APP_TOKEN
 });
-
+// --- DEBUG SNIFFER ---
+// This prints ANY event Slack sends to the console
+app.use(async ({ logger, body, next }) => {
+  console.log(`📨 PACKET RECEIVED: Type=${body.event?.type}, Text='${body.event?.text}'`);
+  await next();
+});
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
