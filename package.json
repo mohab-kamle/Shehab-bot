@@ -1,0 +1,18 @@
+{
+  "name": "shehab-bot",
+  "version": "2.0.0",
+  "description": "AI Project Manager",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.1.0",
+    "@slack/bolt": "^3.17.0",
+    "dotenv": "^16.4.1",
+    "jira-client": "^8.2.2",
+    "node-cron": "^3.0.3",
+    "octokit": "^3.1.2",
+    "openai": "^4.28.0"
+  }
+}
