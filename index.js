@@ -84,65 +84,75 @@ cron.schedule('0 10 * * *', async () => {
 });
 
 // --- 5. MAIN CHAT LOGIC ---
-// --- NEW UNIVERSAL LISTENER (DMs + Mentions) ---
-// --- ROBUST LISTENER (Manual Parsing) ---
+// --- FINAL ROBUST LISTENER ---
 app.message(async ({ message, say }) => {
-  // 1. Ignore other bots
   if (message.subtype === 'bot_message') return;
   console.log(`Processing: ${message.text}`);
 
   try {
-    // 2. Start Chat
+    // 1. Strict Prompt - Forces him to use tools, not text
+    const STRICT_PROMPT = `
+    You are Shehab, the Project Manager.
+    You have access to functions: 'get_prs' and 'create_ticket'.
+    RULES:
+    - If you need data, you MUST call the function. 
+    - DO NOT write "python code" or "pseudo code".
+    - DO NOT say "I will check". Just check.
+    `;
+
     const chat = model.startChat({
-      history: [{ role: "user", parts: [{ text: SYSTEM_PROMPT }] }],
+      history: [{ role: "user", parts: [{ text: STRICT_PROMPT }] }],
       tools: [{
           functionDeclarations: [
-            { name: "get_prs", description: "Get open GitHub PRs" },
-            { name: "create_ticket", description: "Create Jira task", parameters: { type: "OBJECT", properties: { summary: { type: "STRING" } }, required: ["summary"] } }
+            { name: "get_prs", description: "Fetch the list of open GitHub Pull Requests" },
+            { name: "create_ticket", description: "Create a Jira task", parameters: { type: "OBJECT", properties: { summary: { type: "STRING" } }, required: ["summary"] } }
           ]
       }]
     });
 
-    // 3. Send Message to Gemini
     const result = await chat.sendMessage(message.text);
-    const response = await result.response; // Wait for the response object
-    
-    // --- THE FIX: Manually find the function call in the data ---
+    const response = await result.response;
+    const textResponse = response.text();
+
+    // 2. Check for "Real" Tool Calls (The correct way)
     const candidates = response.candidates;
     const parts = candidates ? candidates[0].content.parts : [];
     const functionCallPart = parts.find(part => part.functionCall);
 
-    // 4. Handle Tool Calls
+    // 3. The Handler
     if (functionCallPart) {
-      const call = functionCallPart.functionCall; // Extract the raw call
+      // --- He used the Tool correctly ---
+      const call = functionCallPart.functionCall;
       
       let toolResult = "";
       if (call.name === "get_prs") {
-        await say("👀 Checking GitHub...");
+        await say("👀 Checking GitHub..."); // Feedback to user
         toolResult = await getPullRequests();
       } else if (call.name === "create_ticket") {
-        await say(`📝 Updating Jira with task: ${call.args.summary}...`);
+        await say(`📝 Updating Jira...`);
         toolResult = await createJiraTask(call.args.summary);
       }
       
-      // 5. Send result back to Gemini
-      const result2 = await chat.sendMessage([
-        {
-          functionResponse: {
-            name: call.name,
-            response: { output: toolResult }
-          }
-        }
-      ]);
+      // Send data back to Gemini to summarize
+      const result2 = await chat.sendMessage([{ functionResponse: { name: call.name, response: { output: toolResult } } }]);
       await say(result2.response.text());
+
     } else {
-      // No tool needed, just reply text
-      await say(response.text());
+      // --- FAILSAFE: If he hallucinated code like "get_prs()" ---
+      if (textResponse.includes("get_prs()")) {
+         await say("⚠️ (Auto-Fix) Checking GitHub for you...");
+         const data = await getPullRequests();
+         await say(data);
+         return;
+      }
+      
+      // Otherwise, just a normal chat message
+      await say(textResponse);
     }
 
   } catch (error) {
-    console.error("CRASH REPORT:", error);
-    await say(`I crashed. Error: ${error.message}`);
+    console.error("ERROR:", error);
+    await say(`I tripped. Error: ${error.message}`);
   }
 });
 
