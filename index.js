@@ -15,7 +15,7 @@ const app = new App({
 });
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
 const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
 
@@ -58,7 +58,7 @@ async function createJiraTask(summary) {
 
 // --- 3. SYSTEM PROMPT ---
 const SYSTEM_PROMPT = `
-You are Marcus, the PM for 'Core Orbit'. 
+You are Shehab, the PM for 'Lab Manager'. 
 Current Goal: ${memory.sprint_goal}.
 Tone: Direct, pragmatic, concise. You are the boss.
 Tools: Use 'get_prs' for code checks. Use 'create_ticket' for new tasks.
