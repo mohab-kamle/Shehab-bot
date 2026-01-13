@@ -84,28 +84,25 @@ cron.schedule('0 10 * * *', async () => {
 });
 
 // --- 5. MAIN CHAT LOGIC ---
-// --- FINAL ROBUST LISTENER ---
+// --- THE "HUNTER" LISTENER ---
 app.message(async ({ message, say }) => {
   if (message.subtype === 'bot_message') return;
   console.log(`Processing: ${message.text}`);
 
   try {
-    // 1. Strict Prompt - Forces him to use tools, not text
+    // 1. Strict Prompt
     const STRICT_PROMPT = `
-    You are Shehab, the Project Manager.
-    You have access to functions: 'get_prs' and 'create_ticket'.
-    RULES:
-    - If you need data, you MUST call the function. 
-    - DO NOT write "python code" or "pseudo code".
-    - DO NOT say "I will check". Just check.
+    You are Marcus, the Project Manager.
+    Tools: 'get_prs' (GitHub) and 'create_ticket' (Jira).
+    IMPORTANT: You must triggers the tools. Do not just print the function name.
     `;
 
     const chat = model.startChat({
       history: [{ role: "user", parts: [{ text: STRICT_PROMPT }] }],
       tools: [{
           functionDeclarations: [
-            { name: "get_prs", description: "Fetch the list of open GitHub Pull Requests" },
-            { name: "create_ticket", description: "Create a Jira task", parameters: { type: "OBJECT", properties: { summary: { type: "STRING" } }, required: ["summary"] } }
+            { name: "get_prs", description: "Get GitHub PRs" },
+            { name: "create_ticket", description: "Create Jira task", parameters: { type: "OBJECT", properties: { summary: { type: "STRING" } }, required: ["summary"] } }
           ]
       }]
     });
@@ -114,45 +111,46 @@ app.message(async ({ message, say }) => {
     const response = await result.response;
     const textResponse = response.text();
 
-    // 2. Check for "Real" Tool Calls (The correct way)
-    const candidates = response.candidates;
-    const parts = candidates ? candidates[0].content.parts : [];
-    const functionCallPart = parts.find(part => part.functionCall);
+    // 2. Check for Native Tool Call
+    const functionCallPart = response.candidates?.[0]?.content?.parts?.find(p => p.functionCall);
 
-    // 3. The Handler
     if (functionCallPart) {
-      // --- He used the Tool correctly ---
+      // --- NATIVE TOOL USE ---
       const call = functionCallPart.functionCall;
-      
-      let toolResult = "";
       if (call.name === "get_prs") {
-        await say("👀 Checking GitHub..."); // Feedback to user
-        toolResult = await getPullRequests();
+        await say("👀 Checking GitHub...");
+        const data = await getPullRequests();
+        await say(data);
       } else if (call.name === "create_ticket") {
-        await say(`📝 Updating Jira...`);
-        toolResult = await createJiraTask(call.args.summary);
+        await say("📝 Writing to Jira...");
+        const data = await createJiraTask(call.args.summary);
+        await say(data);
       }
-      
-      // Send data back to Gemini to summarize
-      const result2 = await chat.sendMessage([{ functionResponse: { name: call.name, response: { output: toolResult } } }]);
-      await say(result2.response.text());
-
-    } else {
-      // --- FAILSAFE: If he hallucinated code like "get_prs()" ---
-      if (textResponse.includes("get_prs()")) {
-         await say("⚠️ (Auto-Fix) Checking GitHub for you...");
+    } 
+    // 3. FAILSAFE: Regex Hunt (Catches 'create_ticket("...")')
+    else if (textResponse.includes("create_ticket")) {
+        // Extract content between quotes: create_ticket("THIS PART")
+        const match = textResponse.match(/create_ticket\s*\(\s*["'](.*?)["']\s*\)/);
+        if (match && match[1]) {
+            await say(`⚠️ (Auto-Fix) Creating task: "${match[1]}"...`);
+            const data = await createJiraTask(match[1]);
+            await say(data);
+        } else {
+            await say(textResponse);
+        }
+    }
+    else if (textResponse.includes("get_prs")) {
+         await say("⚠️ (Auto-Fix) Checking GitHub...");
          const data = await getPullRequests();
          await say(data);
-         return;
-      }
-      
-      // Otherwise, just a normal chat message
+    } 
+    else {
       await say(textResponse);
     }
 
   } catch (error) {
-    console.error("ERROR:", error);
-    await say(`I tripped. Error: ${error.message}`);
+    console.error(error);
+    await say(`Error: ${error.message}`);
   }
 });
 
