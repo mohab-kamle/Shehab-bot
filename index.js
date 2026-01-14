@@ -126,23 +126,28 @@ async function searchWeb(query) {
 }
 
 // 🎙️ VOICE: Human Quality (Edge TTS) + Transcript
+// 🎙️ VOICE: Human Quality (Fixed for Node)
 async function sendVoiceNote(text, channelId) {
     try {
-        const tts = new MsEdgeTTS();
-        await tts.setMetadata("en-US-ChristopherNeural", OUTPUT_FORMAT.WEBM_24KHZ_16BIT_MONO_OPUS);
-        const filePath = await tts.toFile("./shehab_voice.webm", text);
+        // Initialize with a Deep Male Voice (Christopher)
+        const tts = new EdgeTTS({ voice: 'en-US-ChristopherNeural' });
+        const filePath = './shehab_voice.mp3';
 
+        // Generate Audio File
+        await tts.ttsToFile(text, filePath);
+
+        // Upload to Slack
         await app.client.files.uploadV2({
             channel_id: channelId,
             file: fs.createReadStream(filePath),
-            filename: "Shehab_Voice.webm",
+            filename: "Shehab_Voice.mp3",
             title: "Shehab Says 🎙️",
-            initial_comment: `🔊 *Voice Note:*\n> ${text}` // Adds transcript!
+            initial_comment: `🔊 *Voice Note:*\n> ${text}`
         });
         return "✅ Voice sent.";
     } catch (error) {
-        console.error(error);
-        return "❌ Voice failed.";
+        console.error("Voice Error:", error);
+        return "❌ Voice failed (Check 'node-edge-tts' install).";
     }
 }
 
