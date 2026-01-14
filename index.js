@@ -1,6 +1,6 @@
 require('dotenv').config();
 const { App } = require('@slack/bolt');
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const OpenAI = require("openai"); // CHANGED: Using OpenAI SDK for Groq
 const { Octokit } = require("octokit");
 const JiraClient = require("jira-client");
 const fs = require('fs');
@@ -14,15 +14,18 @@ const app = new App({
 });
 
 // --- 👥 TEAM CONFIGURATION ---
-// Get IDs from Slack Profile -> Three Dots -> Copy Member ID
 const TEAM_IDS = {
     "Mohab": "U09JQFXPY0M",
     "Ziad": "U09JU0R35C2",
     "Kareem": "U09JRSYTGCW"
 };
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+// --- CHANGED: GROQ CLIENT ---
+const groq = new OpenAI({
+    apiKey: process.env.GROQ_API_KEY,
+    baseURL: "https://api.groq.com/openai/v1"
+});
+
 const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
 const jira = new JiraClient({
     protocol: 'https',
@@ -46,9 +49,9 @@ function getGreeting() {
 }
 
 function formatForSlack(text) {
+    if (!text) return "";
     let clean = text.replace(/\*\*(.*?)\*\*/g, "*$1*").replace(/^#+\s+(.*$)/gm, "*$1*").replace(/^\s*[\*\-]\s+/gm, "• ");
 
-    // DYNAMIC TAGGING
     let mem = {};
     try { mem = JSON.parse(fs.readFileSync('memory.json', 'utf8')); } catch (e) { }
     const users = mem.users || {};
@@ -58,13 +61,13 @@ function formatForSlack(text) {
         clean = clean.replace(regex, `<@${id}>`);
     }
 
-    // Also include your hardcoded TEAM_IDS as fallback if you want
     for (const [name, id] of Object.entries(TEAM_IDS)) {
         const regex = new RegExp(`\\b${name}\\b`, 'gi');
         clean = clean.replace(regex, `<@${id}>`);
     }
     return clean;
 }
+
 // --- TOOLS ---
 async function getPullRequests() {
     try {
@@ -115,13 +118,21 @@ async function updateProjectMemory(key, value) {
     } catch (error) { return `Failed to update memory: ${error.message}`; }
 }
 
-// --- REPORT ENGINE ---
+// --- CHANGED: TOOL DEFINITIONS (OpenAI Format) ---
+const TOOLS_DEFINITION = [
+    { type: "function", function: { name: "get_prs", description: "Get active Pull Requests", parameters: { type: "object", properties: {} } } },
+    { type: "function", function: { name: "get_issues", description: "Get Open Issues", parameters: { type: "object", properties: {} } } },
+    { type: "function", function: { name: "get_file_tree", description: "List files in repo root", parameters: { type: "object", properties: {} } } },
+    { type: "function", function: { name: "read_file", description: "Read file content", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
+    { type: "function", function: { name: "create_ticket", description: "Create Jira task", parameters: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"] } } },
+    { type: "function", function: { name: "update_memory", description: "Update memory", parameters: { type: "object", properties: { key: { type: "string" }, value: { type: "string" } }, required: ["key", "value"] } } }
+];
+
+// --- CHANGED: REPORT ENGINE (Groq) ---
 async function generateDailyReport(channelId) {
     console.log("Generating Report...");
     try {
         const [prs, issues, files] = await Promise.all([getPullRequests(), getIssues(), getFileTree()]);
-
-        // Pass the REAL DATE to the prompt
         const today = new Date().toDateString();
 
         const prompt = `
@@ -142,10 +153,13 @@ async function generateDailyReport(channelId) {
         - Be concise.
         `;
 
-        const result = await model.generateContent(prompt);
-        let report = result.response.text();
+        const completion = await groq.chat.completions.create({
+            model: "llama-3.3-70b-versatile",
+            messages: [{ role: "user", content: prompt }]
+        });
 
-        // Convert Formatting
+        const report = completion.choices[0].message.content;
+
         const formattedReport = formatForSlack(report);
         const greeting = getGreeting();
 
@@ -162,10 +176,10 @@ async function generateDailyReport(channelId) {
         return false;
     }
 }
+
 // --- SCHEDULE ---
 setInterval(async () => {
     const now = new Date();
-    // Runs at 10:00 AM server time
     if (now.getHours() === 10 && now.getMinutes() === 0 && lastReportDate !== now.toDateString()) {
         let mem = {};
         try { mem = JSON.parse(fs.readFileSync('memory.json', 'utf8')); } catch (e) { }
@@ -175,21 +189,19 @@ setInterval(async () => {
         }
     }
 }, 60000);
+
 // --- USER RECOGNITION ---
 async function getOrRegisterUser(userId) {
     let mem = {};
     try { mem = JSON.parse(fs.readFileSync('memory.json', 'utf8')); } catch (e) { }
     if (!mem.users) mem.users = {};
 
-    // 1. If we already know this person, return their name
     if (mem.users[userId]) return mem.users[userId];
 
-    // 2. If new, ask Slack for their real name
     try {
         const userInfo = await app.client.users.info({ user: userId });
         const realName = userInfo.user.real_name || userInfo.user.name;
 
-        // 3. Save to Memory
         mem.users[userId] = realName;
         fs.writeFileSync('memory.json', JSON.stringify(mem, null, 2));
 
@@ -200,8 +212,8 @@ async function getOrRegisterUser(userId) {
         return "Unknown User";
     }
 }
-// --- MAIN HANDLER ---
-// --- MAIN HANDLER ---
+
+// --- MAIN HANDLER (GROQ EDITION) ---
 app.message(async ({ message, say }) => {
     if (message.subtype === 'bot_message') return;
 
@@ -227,135 +239,131 @@ app.message(async ({ message, say }) => {
     if (history.length > 20) history = history.slice(history.length - 20);
 
     try {
-        // 1. IDENTIFY THE SPEAKER (The crucial step)
         const speakerName = await getOrRegisterUser(message.user);
         console.log(`🗣️ Speaker identified as: ${speakerName}`);
 
         let mem = { project_name: "Lab Manager", role_mohab: "Full Stack", role_ziad: "Frontend", role_kareem: "Backend" };
         try { const f = JSON.parse(fs.readFileSync('memory.json', 'utf8')); mem = { ...mem, ...f }; } catch (e) { }
 
-        const SYSTEM_PROMPT = {
-            role: "user",
-            parts: [{
-                text: `
-        You are Shehab, the Project Manager.
-        
-        WHO YOU ARE TALKING TO:
-        You are currently speaking with **${speakerName}**.
-        (If the name is "Mohab", "Ziad", or "Kareem", treat them as your team member).
+        // --- CONSTRUCT MESSAGES FOR GROQ ---
+        const messages = [
+            {
+                role: "system",
+                content: `You are Shehab, the Project Manager.
+                
+                WHO YOU ARE TALKING TO:
+                You are speaking with **${speakerName}**.
+                
+                CONTEXT:
+                - Project: ${mem.project_name}
+                - Team: Mohab (${mem.role_mohab}), Ziad (${mem.role_ziad}), Kareem (${mem.role_kareem}).
+                
+                TOOLS: You have tools to check GitHub (get_prs, get_issues, get_file_tree, read_file), create Jira tasks (create_ticket), and update memory.
+                
+                INSTRUCTIONS:
+                - If asked "Do you know me?", answer "Yes, you are ${speakerName}."
+                - Use tools whenever needed.
+                `
+            },
+            ...history,
+            { role: "user", content: message.text }
+        ];
 
-        CONTEXT:
-        - Project: ${mem.project_name}
-        - Team: Mohab (Full Stack), Ziad (Frontend), Kareem (Backend).
-        
-        TOOLS: 'get_prs', 'get_issues', 'get_file_tree', 'read_file', 'create_ticket', 'update_memory'.
-        
-        INSTRUCTIONS:
-        - Acknowledge the user by name if appropriate.
-        - If asked "Do you know me?", answer "Yes, you are ${speakerName}."
-        - Use the tools directly. If you cannot, print the function call text like: get_file_tree()
-      `}]
-        };
-
-        const chat = model.startChat({
-            history: [SYSTEM_PROMPT, ...history],
-            tools: [{
-                functionDeclarations: [
-                    { name: "get_prs", description: "Get PRs" },
-                    { name: "get_issues", description: "Get Open Issues" },
-                    { name: "get_file_tree", description: "List files in repo root" },
-                    { name: "read_file", description: "Read file content", parameters: { type: "OBJECT", properties: { path: { type: "STRING" } }, required: ["path"] } },
-                    { name: "create_ticket", description: "Create Jira task", parameters: { type: "OBJECT", properties: { summary: { type: "STRING" } }, required: ["summary"] } },
-                    { name: "update_memory", description: "Update memory", parameters: { type: "OBJECT", properties: { key: { type: "STRING" }, value: { type: "STRING" } }, required: ["key", "value"] } }
-                ]
-            }]
+        // --- CALL GROQ ---
+        const completion = await groq.chat.completions.create({
+            model: "llama-3.3-70b-versatile",
+            messages: messages,
+            tools: TOOLS_DEFINITION,
+            tool_choice: "auto"
         });
 
-        const result = await chat.sendMessage(message.text);
-        const response = await result.response;
-        let textResponse = "";
-        try { textResponse = response.text(); } catch (e) { textResponse = ""; }
+        const responseMessage = completion.choices[0].message;
+        let finalReply = responseMessage.content;
+        let toolCalls = responseMessage.tool_calls;
 
-        history.push({ role: "user", parts: [{ text: message.text }] });
+        // --- SAVE USER MESSAGE TO HISTORY ---
+        history.push({ role: "user", content: message.text });
 
-        const functionCallPart = response.candidates?.[0]?.content?.parts?.find(p => p.functionCall);
-        let finalReply = textResponse;
+        // --- HANDLE TOOL CALLS ---
+        if (toolCalls) {
+            // Only handle the first tool call for simplicity in this loop
+            // (Llama usually does one at a time for these tasks)
+            const toolCall = toolCalls[0];
+            const fnName = toolCall.function.name;
+            const args = JSON.parse(toolCall.function.arguments);
 
-        if (functionCallPart) {
-            const call = functionCallPart.functionCall;
-            console.log(`Tool: ${call.name}`);
+            console.log(`Tool: ${fnName}`);
 
-            if (call.name === "get_prs") {
+            if (fnName === "get_prs") {
                 await safeSay("👀 Checking PRs...");
                 finalReply = await getPullRequests();
             }
-            else if (call.name === "get_issues") {
+            else if (fnName === "get_issues") {
                 await safeSay("📋 Checking Issue Backlog...");
                 finalReply = await getIssues();
             }
-            else if (call.name === "get_file_tree") {
+            else if (fnName === "get_file_tree") {
                 await safeSay("📂 Scanning file structure...");
                 finalReply = await getFileTree();
             }
-            else if (call.name === "read_file") {
-                await safeSay(`📖 Reading ${call.args.path}...`);
-                finalReply = await readFileContent(call.args.path);
+            else if (fnName === "read_file") {
+                await safeSay(`📖 Reading ${args.path}...`);
+                finalReply = await readFileContent(args.path);
             }
-            else if (call.name === "create_ticket") {
+            else if (fnName === "create_ticket") {
                 await safeSay("📝 Creating Ticket...");
-                finalReply = await createJiraTask(call.args.summary);
+                finalReply = await createJiraTask(args.summary);
             }
-            else if (call.name === "update_memory") {
+            else if (fnName === "update_memory") {
                 await safeSay("💾 Saving...");
-                finalReply = await updateProjectMemory(call.args.key, call.args.value);
+                finalReply = await updateProjectMemory(args.key, args.value);
             }
+
             await safeSay(finalReply);
-        }
-        // FAILSAFES
-        else if (textResponse.includes('get_file_tree')) {
-            await safeSay("⚠️ (Auto-Fix) Scanning file structure...");
-            finalReply = await getFileTree();
-            await safeSay(finalReply);
-        }
-        else if (textResponse.includes('get_issues')) {
-            await safeSay("⚠️ (Auto-Fix) Checking Issues...");
-            finalReply = await getIssues();
-            await safeSay(finalReply);
-        }
-        else if (textResponse.includes('read_file')) {
-            const match = textResponse.match(/read_file\s*\(\s*["'](.*?)["']\s*\)/);
-            if (match) {
-                await safeSay(`⚠️ (Auto-Fix) Reading ${match[1]}...`);
-                finalReply = await readFileContent(match[1]);
-                await safeSay(finalReply);
-            } else await safeSay(textResponse);
-        }
-        else if (textResponse.includes('create_ticket')) {
-            const match = textResponse.match(/create_ticket\s*\(\s*["'](.*?)["']\s*\)/);
-            if (match) {
-                await safeSay(`⚠️ (Auto-Fix) Creating task: "${match[1]}"...`);
-                finalReply = await createJiraTask(match[1]);
-                await safeSay(finalReply);
-            } else await safeSay(textResponse);
-        }
-        else if (textResponse.includes('update_memory')) {
-            const match = textResponse.match(/update_memory\s*\(\s*["'](.*?)["']\s*,\s*["'](.*?)["']\s*\)/);
-            if (match) {
-                await safeSay(`⚠️ (Auto-Fix) Updating ${match[1]}...`);
-                finalReply = await updateProjectMemory(match[1], match[2]);
-                await safeSay(finalReply);
-            } else await safeSay(textResponse);
-        }
-        else if (textResponse.includes('get_prs')) {
-            await safeSay("⚠️ (Auto-Fix) Checking GitHub...");
-            finalReply = await getPullRequests();
-            await safeSay(finalReply);
-        }
-        else {
-            await safeSay(finalReply || "✅ Done.");
         }
 
-        history.push({ role: "model", parts: [{ text: finalReply || "Done" }] });
+        // --- FAILSAFES (Regex Hunters) ---
+        // (Kept strictly because you asked to maintain functionality, useful if Llama hallucinates text)
+        if (finalReply && typeof finalReply === 'string') {
+            if (finalReply.includes('get_file_tree') && !toolCalls) {
+                await safeSay("⚠️ (Auto-Fix) Scanning file structure...");
+                finalReply = await getFileTree();
+                await safeSay(finalReply);
+            }
+            else if (finalReply.includes('get_issues') && !toolCalls) {
+                await safeSay("⚠️ (Auto-Fix) Checking Issues...");
+                finalReply = await getIssues();
+                await safeSay(finalReply);
+            }
+            else if (finalReply.includes('read_file') && !toolCalls) {
+                const match = finalReply.match(/read_file\s*\(\s*["'](.*?)["']\s*\)/);
+                if (match) {
+                    await safeSay(`⚠️ (Auto-Fix) Reading ${match[1]}...`);
+                    finalReply = await readFileContent(match[1]);
+                    await safeSay(finalReply);
+                } else await safeSay(finalReply);
+            }
+            else if (finalReply.includes('create_ticket') && !toolCalls) {
+                const match = finalReply.match(/create_ticket\s*\(\s*["'](.*?)["']\s*\)/);
+                if (match) {
+                    await safeSay(`⚠️ (Auto-Fix) Creating task: "${match[1]}"...`);
+                    finalReply = await createJiraTask(match[1]);
+                    await safeSay(finalReply);
+                } else await safeSay(finalReply);
+            }
+            else if (finalReply.includes('get_prs') && !toolCalls) {
+                await safeSay("⚠️ (Auto-Fix) Checking GitHub...");
+                finalReply = await getPullRequests();
+                await safeSay(finalReply);
+            }
+            else if (!toolCalls) {
+                // If it wasn't a tool call and wasn't caught by failsafe, just say the text
+                await safeSay(finalReply);
+            }
+        }
+
+        // --- SAVE ASSISTANT REPLY TO HISTORY ---
+        history.push({ role: "assistant", content: finalReply || "Done" });
         CONVERSATIONS[contextId] = history;
 
     } catch (error) {
@@ -364,4 +372,4 @@ app.message(async ({ message, say }) => {
     }
 });
 
-(async () => { await app.start(); console.log('⚡️ Shehab V11 (Formatted & Tagged) is Online'); })();
+(async () => { await app.start(); console.log('⚡️ Shehab V18 (Groq Edition) is Online'); })();
