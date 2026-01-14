@@ -4,7 +4,7 @@ const OpenAI = require("openai");
 const { Octokit } = require("octokit");
 const JiraClient = require("jira-client");
 const { search } = require('duck-duck-scrape');
-const { MsEdgeTTS, OUTPUT_FORMAT } = require("ms-edge-tts"); // Human Voice
+const { MsEdgeTTS, OUTPUT_FORMAT } = require("node-edge-tts"); // Human Voice
 const fs = require('fs');
 
 // --- CONFIGURATION ---
