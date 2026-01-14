@@ -14,7 +14,7 @@ const app = new App({
 });
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
 const jira = new JiraClient({
   protocol: 'https',
