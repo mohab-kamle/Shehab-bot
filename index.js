@@ -4,7 +4,7 @@ const OpenAI = require("openai");
 const { Octokit } = require("octokit");
 const JiraClient = require("jira-client");
 const { search } = require('duck-duck-scrape');
-const { EdgeTTS } = require("node-edge-tts"); // Human Voice
+
 const fs = require('fs');
 
 // --- CONFIGURATION ---
@@ -125,31 +125,7 @@ async function searchWeb(query) {
     } catch (error) { return `Search Error: ${error.message}`; }
 }
 
-// 🎙️ VOICE: Human Quality (Edge TTS) + Transcript
-// 🎙️ VOICE: Human Quality (Fixed for Node)
-async function sendVoiceNote(text, channelId) {
-    try {
-        // Initialize with a Deep Male Voice (Christopher)
-        const tts = new EdgeTTS({ voice: 'en-US-ChristopherNeural' });
-        const filePath = './shehab_voice.mp3';
 
-        // Generate Audio File
-        await tts.ttsToFile(text, filePath);
-
-        // Upload to Slack
-        await app.client.files.uploadV2({
-            channel_id: channelId,
-            file: fs.createReadStream(filePath),
-            filename: "Shehab_Voice.mp3",
-            title: "Shehab Says 🎙️",
-            initial_comment: `🔊 *Voice Note:*\n> ${text}`
-        });
-        return "✅ Voice sent.";
-    } catch (error) {
-        console.error("Voice Error:", error);
-        return "❌ Voice failed (Check 'node-edge-tts' install).";
-    }
-}
 
 // --- TOOL DEFINITIONS ---
 const TOOLS_DEFINITION = [
@@ -160,7 +136,6 @@ const TOOLS_DEFINITION = [
     { type: "function", function: { name: "create_ticket", description: "Create Jira task", parameters: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"] } } },
     { type: "function", function: { name: "update_memory", description: "Update memory", parameters: { type: "object", properties: { key: { type: "string" }, value: { type: "string" } }, required: ["key", "value"] } } },
     { type: "function", function: { name: "search_web", description: "Search internet", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
-    { type: "function", function: { name: "send_voice_note", description: "Send voice audio", parameters: { type: "object", properties: { text_to_speak: { type: "string" } }, required: ["text_to_speak"] } } }
 ];
 
 // --- 🧠 THE AUTONOMY LOOP (The "Free Will") ---
@@ -273,10 +248,10 @@ app.message(async ({ message, say }) => {
         
         RULES:
         1. Use 'search_web' for unknown tech/standards.
-        2. Use 'send_voice_note' if asked to speak.
+
         3. Be proactive.
         
-        TOOLS: GitHub, Jira, Memory, Edge TTS, DuckDuckGo.
+        TOOLS: GitHub, Jira, Memory, DuckDuckGo.
         `;
 
         const messages = [
@@ -320,9 +295,9 @@ app.message(async ({ message, say }) => {
             else if (fnName === "read_file") { await safeSay(`📖 Reading ${args.path}...`); finalReply = await readFileContent(args.path); }
             else if (fnName === "create_ticket") { await safeSay("📝 Creating Ticket..."); finalReply = await createJiraTask(args.summary); }
             else if (fnName === "update_memory") { await safeSay("💾 Saving..."); finalReply = await updateProjectMemory(args.key, args.value); }
-            else if (fnName === "send_voice_note") { await safeSay("🎙️ Recording..."); await sendVoiceNote(args.text_to_speak, message.channel); finalReply = "Voice sent."; }
 
-            if (fnName !== "search_web" && fnName !== "send_voice_note") await safeSay(finalReply);
+
+            if (fnName !== "search_web") await safeSay(finalReply);
         }
 
         // FAILSAFES
@@ -345,4 +320,4 @@ app.message(async ({ message, say }) => {
     }
 });
 
-(async () => { await app.start(); console.log(`⚡️ Shehab V23 (Autonomous & Human Voice) is Online`); })();
+(async () => { await app.start(); console.log(`⚡️ Shehab V23 (Autonomous) is Online`); })();
