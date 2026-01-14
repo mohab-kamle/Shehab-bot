@@ -146,7 +146,7 @@ async function sendVoiceNote(text, channelId) {
         const writer = fs.createWriteStream(filePath);
         response.data.pipe(writer);
         await new Promise((resolve, reject) => { writer.on('finish', resolve); writer.on('error', reject); });
-        await app.client.files.uploadV2({ channel_id: channelId, file: fs.createReadStream(filePath), filename: "Shehab_Voice.mp3", title: "Shehab Says 🎙️", initial_comment: "🔊 " + text });
+        await app.client.files.uploadV2({ channel_id: channelId, file: fs.createReadStream(filePath), filename: "Shehab_Voice.mp3", title: "Shehab Says 🎙️", initial_comment: "🔊 *Voice Transcript:*\n" + text });
         return "✅ Voice sent.";
     } catch (error) { return "❌ Voice failed."; }
 }
