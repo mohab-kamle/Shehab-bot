@@ -154,7 +154,7 @@ async function generateDailyReport(channelId) {
         `;
 
         const completion = await groq.chat.completions.create({
-            model: "llama-3.3-70b-versatile",
+            model: "llama-4-scout-17b-16e-instruct",
             messages: [{ role: "user", content: prompt }]
         });
 
@@ -271,7 +271,7 @@ app.message(async ({ message, say }) => {
 
         // --- CALL GROQ ---
         const completion = await groq.chat.completions.create({
-            model: "llama-3.3-70b-versatile",
+            model: "llama-4-scout-17b-16e-instruct",
             messages: messages,
             tools: TOOLS_DEFINITION,
             tool_choice: "auto"
