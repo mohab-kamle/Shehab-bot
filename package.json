@@ -10,6 +10,7 @@
     "@google/generative-ai": "^0.1.0",
     "@slack/bolt": "^3.17.0",
     "dotenv": "^16.4.1",
+    "duck-duck-scrape": "^2.2.7",
     "jira-client": "^8.2.2",
     "node-cron": "^3.0.3",
     "octokit": "^3.1.2",
