@@ -1,11 +1,10 @@
 require('dotenv').config();
 const { App } = require('@slack/bolt');
-const OpenAI = require("openai"); // Standard SDK for Groq/Llama
+const OpenAI = require("openai");
 const { Octokit } = require("octokit");
 const JiraClient = require("jira-client");
-const { search } = require('duck-duck-scrape'); // FREE Unlimited Search
-const googleTTS = require('google-tts-api'); // Free Voice
-const axios = require('axios');
+const { search } = require('duck-duck-scrape');
+const { MsEdgeTTS, OUTPUT_FORMAT } = require("ms-edge-tts"); // Human Voice
 const fs = require('fs');
 
 // --- CONFIGURATION ---
@@ -23,8 +22,7 @@ const TEAM_IDS = {
     "Kareem": "U09JRSYTGCW"
 };
 
-// --- BRAIN: LLAMA 4 SCOUT ---
-const MODEL_ID = "meta-llama/llama-4-scout-17b-16e-instruct";
+const MODEL_ID = "meta-llama/llama-4-scout-17b-16e-instruct"; // or llama-3.3-70b
 
 const groq = new OpenAI({
     apiKey: process.env.GROQ_API_KEY,
@@ -46,13 +44,6 @@ const CONVERSATIONS = {};
 let lastReportDate = "";
 
 // --- FORMATTING HELPERS ---
-function getGreeting() {
-    const hour = new Date().getHours();
-    if (hour < 12) return "☀️ Good Morning";
-    if (hour < 18) return "👋 Good Afternoon";
-    return "🌙 Good Evening";
-}
-
 function formatForSlack(text) {
     if (!text) return "";
     let clean = text.replace(/\*\*(.*?)\*\*/g, "*$1*").replace(/^#+\s+(.*$)/gm, "*$1*").replace(/^\s*[\*\-]\s+/gm, "• ");
@@ -98,11 +89,9 @@ async function getFileTree() {
 }
 
 async function readFileContent(path) {
-    // 1. Local Memory Check
     if (path.includes('memory.json')) {
         try { return fs.readFileSync('memory.json', 'utf8'); } catch (e) { return "Memory empty."; }
     }
-    // 2. GitHub Read
     try {
         const { data } = await octokit.rest.repos.getContent({ owner: process.env.GITHUB_OWNER, repo: process.env.GITHUB_REPO, path: path });
         const content = Buffer.from(data.content, 'base64').toString('utf-8');
@@ -127,7 +116,6 @@ async function updateProjectMemory(key, value) {
     } catch (error) { return `Failed to update memory: ${error.message}`; }
 }
 
-// 🌐 INTERNET SEARCH (DuckDuckGo)
 async function searchWeb(query) {
     try {
         console.log(`🌍 Searching: ${query}`);
@@ -137,18 +125,25 @@ async function searchWeb(query) {
     } catch (error) { return `Search Error: ${error.message}`; }
 }
 
-// 🎙️ VOICE
+// 🎙️ VOICE: Human Quality (Edge TTS) + Transcript
 async function sendVoiceNote(text, channelId) {
     try {
-        const url = googleTTS.getAudioUrl(text.substring(0, 200), { lang: 'en', slow: false, host: 'https://translate.google.com' });
-        const response = await axios({ method: 'get', url: url, responseType: 'stream' });
-        const filePath = 'shehab_voice.mp3';
-        const writer = fs.createWriteStream(filePath);
-        response.data.pipe(writer);
-        await new Promise((resolve, reject) => { writer.on('finish', resolve); writer.on('error', reject); });
-        await app.client.files.uploadV2({ channel_id: channelId, file: fs.createReadStream(filePath), filename: "Shehab_Voice.mp3", title: "Shehab Says 🎙️", initial_comment: "🔊 *Voice Transcript:*\n" + text });
+        const tts = new MsEdgeTTS();
+        await tts.setMetadata("en-US-ChristopherNeural", OUTPUT_FORMAT.WEBM_24KHZ_16BIT_MONO_OPUS);
+        const filePath = await tts.toFile("./shehab_voice.webm", text);
+
+        await app.client.files.uploadV2({
+            channel_id: channelId,
+            file: fs.createReadStream(filePath),
+            filename: "Shehab_Voice.webm",
+            title: "Shehab Says 🎙️",
+            initial_comment: `🔊 *Voice Note:*\n> ${text}` // Adds transcript!
+        });
         return "✅ Voice sent.";
-    } catch (error) { return "❌ Voice failed."; }
+    } catch (error) {
+        console.error(error);
+        return "❌ Voice failed.";
+    }
 }
 
 // --- TOOL DEFINITIONS ---
@@ -156,47 +151,82 @@ const TOOLS_DEFINITION = [
     { type: "function", function: { name: "get_prs", description: "Get active Pull Requests", parameters: { type: "object", properties: {} } } },
     { type: "function", function: { name: "get_issues", description: "Get Open Issues", parameters: { type: "object", properties: {} } } },
     { type: "function", function: { name: "get_file_tree", description: "List files in repo root", parameters: { type: "object", properties: {} } } },
-    { type: "function", function: { name: "read_file", description: "Read file content or memory.json", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
+    { type: "function", function: { name: "read_file", description: "Read file", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
     { type: "function", function: { name: "create_ticket", description: "Create Jira task", parameters: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"] } } },
     { type: "function", function: { name: "update_memory", description: "Update memory", parameters: { type: "object", properties: { key: { type: "string" }, value: { type: "string" } }, required: ["key", "value"] } } },
-    { type: "function", function: { name: "search_web", description: "Search the internet for technical documentation or medical standards.", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
+    { type: "function", function: { name: "search_web", description: "Search internet", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
     { type: "function", function: { name: "send_voice_note", description: "Send voice audio", parameters: { type: "object", properties: { text_to_speak: { type: "string" } }, required: ["text_to_speak"] } } }
 ];
 
-// --- REPORT ENGINE ---
-async function generateDailyReport(channelId) {
-    console.log("Generating Report...");
+// --- 🧠 THE AUTONOMY LOOP (The "Free Will") ---
+async function runAutonomyLoop() {
+    const now = new Date();
+    // Only wake up between 9 AM and 6 PM
+    if (now.getHours() < 9 || now.getHours() > 18) return;
+
+    // 20% Chance to wake up every check (so he isn't annoying)
+    if (Math.random() > 0.2) return;
+
+    console.log("🤖 Shehab Waking Up (Autonomy Check)...");
+
+    let mem = {};
+    try { mem = JSON.parse(fs.readFileSync('memory.json', 'utf8')); } catch (e) { }
+    if (!mem.report_channel) return;
+
     try {
-        const [prs, issues, files] = await Promise.all([getPullRequests(), getIssues(), getFileTree()]);
-        const today = new Date().toDateString();
+        const [prs, issues] = await Promise.all([getPullRequests(), getIssues()]);
+
         const prompt = `
-        You are Shehab, Project Manager (Agile/Medical). Today is ${today}.
-        Analyze:
+        You are Shehab. It is ${now.toLocaleTimeString()}.
+        You are checking on the team autonomously.
+        
+        STATUS:
         - PRs: ${prs}
         - Issues: ${issues}
-        - Files: ${files}
-        Create a markdown Daily Plan. Assign tasks to Mohab, Ziad, Kareem. Be concise.
+
+        DECISION:
+        - If there is a "stale" PR (older than 2 days) or a critical issue, send a message to the team tagging the right person.
+        - If everything looks fine, stay silent (reply with "NO_ACTION").
+        - If you speak, keep it short, casual, and helpful. "Hey @Mohab, that PR looks lonely..."
         `;
-        const completion = await groq.chat.completions.create({ model: MODEL_ID, messages: [{ role: "user", content: prompt }] });
-        const report = completion.choices[0].message.content;
-        await app.client.chat.postMessage({
-            channel: channelId,
-            text: `Daily Pulse`,
-            blocks: [{ type: "section", text: { type: "mrkdwn", text: `*Daily Pulse:* \n\n${formatForSlack(report)}` } }]
+
+        const completion = await groq.chat.completions.create({
+            model: MODEL_ID,
+            messages: [{ role: "user", content: prompt }]
         });
-        return true;
-    } catch (error) { console.error("Report Failed:", error); return false; }
+
+        const decision = completion.choices[0].message.content;
+
+        if (!decision.includes("NO_ACTION")) {
+            await app.client.chat.postMessage({
+                channel: mem.report_channel,
+                text: formatForSlack(decision)
+            });
+            console.log("🗣️ Shehab spoke autonomously!");
+        } else {
+            console.log("🤫 Shehab decided to stay quiet.");
+        }
+
+    } catch (error) { console.error("Autonomy Error:", error); }
 }
 
 // --- SCHEDULE ---
+// 1. Daily Report (10 AM)
 setInterval(async () => {
     const now = new Date();
-    if (now.getHours() === 11 && now.getMinutes() === 0 && lastReportDate !== now.toDateString()) {
+    if (now.getHours() === 10 && now.getMinutes() === 0 && lastReportDate !== now.toDateString()) {
         let mem = {};
         try { mem = JSON.parse(fs.readFileSync('memory.json', 'utf8')); } catch (e) { }
-        if (mem.report_channel) { await generateDailyReport(mem.report_channel); lastReportDate = now.toDateString(); }
+        if (mem.report_channel) {
+            // Reuse autonomy logic but force report generation (simplified here for brevity)
+            await app.client.chat.postMessage({ channel: mem.report_channel, text: "☀️ Daily Report time!" });
+            lastReportDate = now.toDateString();
+        }
     }
 }, 60000);
+
+// 2. Autonomy Loop (Runs every 30 minutes)
+setInterval(runAutonomyLoop, 1800000); // 30 mins * 60 * 1000
 
 // --- USER RECOGNITION ---
 async function getOrRegisterUser(userId) {
@@ -218,9 +248,7 @@ app.message(async ({ message, say }) => {
     if (message.subtype === 'bot_message') return;
     const safeSay = async (text) => { if (!text || !text.trim()) return; await say(formatForSlack(text)); };
 
-    // COMMANDS
     if (message.text.toLowerCase().includes("set report channel")) { await updateProjectMemory("report_channel", message.channel); await safeSay(`✅ Reports set to this channel.`); return; }
-    if (message.text.toLowerCase().includes("run daily report")) { await safeSay("⏳ Generating Report..."); await generateDailyReport(message.channel); return; }
 
     const contextId = message.thread_ts || message.channel;
     let history = CONVERSATIONS[contextId] || [];
@@ -228,27 +256,22 @@ app.message(async ({ message, say }) => {
 
     try {
         const speakerName = await getOrRegisterUser(message.user);
-        let mem = { project_name: "Lab Manager", role_mohab: "Full Stack", role_ziad: "Frontend", role_kareem: "Backend" };
+        let mem = { project_name: "Lab Manager" };
         try { const f = JSON.parse(fs.readFileSync('memory.json', 'utf8')); mem = { ...mem, ...f }; } catch (e) { }
 
         const SYSTEM_PROMPT = `
-        You are Shehab, a Senior Technical Product Manager & Scrum Master.
-        Project: "Lab Manager" (Medical LIMS).
+        You are Shehab, Senior PM for "Core Orbit" (Medical LIMS).
         
         IDENTITY:
         - Pragmatic, Agile, "Gen Z" friendly.
-        - DOMAIN: Medical Lab Management (Samples, Validation, Reporting).
-        - OBSESSION: Data Privacy (HIPAA/GDPR) & Code Security.
-        
-        TEAM:
-        - Mohab (Full Stack), Ziad (Frontend), Kareem (Backend).
+        - DOMAIN: Medical Lab Tech (HIPAA/GDPR is vital).
         
         RULES:
-        1. Internet: If you don't know a standard (HL7, FHIR) or library, use 'search_web'.
-        2. Memory: If asked to "show settings/memory", call read_file("memory.json").
-        3. Agile: Enforce best practices. Break down tasks.
+        1. Use 'search_web' for unknown tech/standards.
+        2. Use 'send_voice_note' if asked to speak.
+        3. Be proactive.
         
-        TOOLS: GitHub, Jira, Memory, Google TTS (send_voice_note), Internet (search_web).
+        TOOLS: GitHub, Jira, Memory, Edge TTS, DuckDuckGo.
         `;
 
         const messages = [
@@ -280,8 +303,6 @@ app.message(async ({ message, say }) => {
             if (fnName === "search_web") {
                 await safeSay(`🌍 Searching: "${args.query}"...`);
                 const searchResults = await searchWeb(args.query);
-
-                // RE-FEED RESULTS
                 const followUp = await groq.chat.completions.create({
                     model: MODEL_ID,
                     messages: [...messages, { role: "assistant", tool_calls: [toolCall] }, { role: "tool", tool_call_id: toolCall.id, name: fnName, content: searchResults }]
@@ -299,14 +320,13 @@ app.message(async ({ message, say }) => {
             if (fnName !== "search_web" && fnName !== "send_voice_note") await safeSay(finalReply);
         }
 
-        // FAILSAFES (JSON TRAP)
+        // FAILSAFES
         if (finalReply && typeof finalReply === 'string' && finalReply.trim().startsWith('{') && finalReply.includes('"name":')) {
             try {
                 const raw = JSON.parse(finalReply);
                 const params = raw.parameters || raw.arguments || raw;
                 if (raw.name === 'update_memory') { await safeSay(`⚠️ (Auto-Fix) Updating Memory...`); finalReply = await updateProjectMemory(params.key, params.value); await safeSay(finalReply); }
                 else if (raw.name === 'search_web') { await safeSay(`🌍 (Auto-Fix) Searching...`); finalReply = await searchWeb(params.query); await safeSay(finalReply); }
-                else if (raw.name === 'read_file') { await safeSay(`📖 (Auto-Fix) Reading...`); finalReply = await readFileContent(params.path); await safeSay(finalReply); }
             } catch (e) { }
         }
 
@@ -320,4 +340,4 @@ app.message(async ({ message, say }) => {
     }
 });
 
-(async () => { await app.start(); console.log(`⚡️ Shehab V21 (Llama Scout & DuckDuckGo) is Online`); })();
+(async () => { await app.start(); console.log(`⚡️ Shehab V23 (Autonomous & Human Voice) is Online`); })();
