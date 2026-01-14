@@ -186,7 +186,8 @@ setInterval(async () => {
     }
 }, 60000);
 
-// --- MAIN HANDLER ---
+
+// --- MAIN HANDLER (With ALL Failsafes) ---
 app.message(async ({ message, say }) => {
   if (message.subtype === 'bot_message') return;
 
@@ -207,7 +208,6 @@ app.message(async ({ message, say }) => {
       return;
   }
 
-  // NORMAL CHAT
   const contextId = message.thread_ts || message.channel;
   let history = CONVERSATIONS[contextId] || [];
   if (history.length > 20) history = history.slice(history.length - 20);
@@ -222,10 +222,7 @@ app.message(async ({ message, say }) => {
         You are Shehab, Project Manager.
         TEAM: Mohab (${mem.role_mohab}), Ziad (${mem.role_ziad}), Kareem (${mem.role_kareem}).
         TOOLS: 'get_prs', 'get_issues', 'get_file_tree', 'read_file', 'create_ticket', 'update_memory'.
-        RULES: 
-        - Assign tasks using "[Name] Summary". 
-        - Confirm Jira creations.
-        - If asked to "check the code", use 'get_file_tree' then 'read_file'.
+        IMPORTANT: Use the tools directly. If you cannot, print the function call text like: get_file_tree()
       `}]
     };
 
@@ -254,6 +251,7 @@ app.message(async ({ message, say }) => {
     let finalReply = textResponse;
 
     if (functionCallPart) {
+      // --- NATIVE TOOL CALL ---
       const call = functionCallPart.functionCall;
       console.log(`Tool: ${call.name}`);
 
@@ -283,7 +281,27 @@ app.message(async ({ message, say }) => {
       }
       await safeSay(finalReply);
     } 
-    // FAILSAFES (Regex)
+    // --- TEXT FAILSAFES (The Hunters) ---
+    else if (textResponse.includes('get_file_tree')) {
+         await safeSay("⚠️ (Auto-Fix) Scanning file structure...");
+         finalReply = await getFileTree();
+         await safeSay(finalReply);
+    }
+    else if (textResponse.includes('get_issues')) {
+         await safeSay("⚠️ (Auto-Fix) Checking Issues...");
+         finalReply = await getIssues();
+         await safeSay(finalReply);
+    }
+    else if (textResponse.includes('read_file')) {
+         const match = textResponse.match(/read_file\s*\(\s*["'](.*?)["']\s*\)/);
+         if (match) {
+             await safeSay(`⚠️ (Auto-Fix) Reading ${match[1]}...`);
+             finalReply = await readFileContent(match[1]);
+             await safeSay(finalReply);
+         } else {
+             await safeSay(textResponse);
+         }
+    }
     else if (textResponse.includes('create_ticket')) {
         const match = textResponse.match(/create_ticket\s*\(\s*["'](.*?)["']\s*\)/);
         if (match) {
@@ -292,6 +310,19 @@ app.message(async ({ message, say }) => {
             await safeSay(finalReply);
         } else await safeSay(textResponse);
     }
+    else if (textResponse.includes('update_memory')) {
+        const match = textResponse.match(/update_memory\s*\(\s*["'](.*?)["']\s*,\s*["'](.*?)["']\s*\)/);
+        if (match) {
+             await safeSay(`⚠️ (Auto-Fix) Updating ${match[1]}...`);
+             finalReply = await updateProjectMemory(match[1], match[2]);
+             await safeSay(finalReply);
+        } else await safeSay(textResponse);
+    }
+    else if (textResponse.includes('get_prs')) {
+         await safeSay("⚠️ (Auto-Fix) Checking GitHub...");
+         finalReply = await getPullRequests();
+         await safeSay(finalReply);
+    } 
     else {
       await safeSay(finalReply || "✅ Done.");
     }
