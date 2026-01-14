@@ -14,6 +14,7 @@
     "google-tts-api": "^2.0.2",
     "jira-client": "^8.2.2",
     "node-cron": "^3.0.3",
+    "node-edge-tts": "^1.2.8",
     "octokit": "^3.1.2",
     "openai": "^4.104.0"
   }
