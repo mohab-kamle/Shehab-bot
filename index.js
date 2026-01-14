@@ -94,6 +94,16 @@ async function getFileTree() {
 }
 
 async function readFileContent(path) {
+    // 1. Local Memory Bypass
+    if (path.includes('memory.json')) {
+        try {
+            return fs.readFileSync('memory.json', 'utf8');
+        } catch (e) {
+            return "Memory file is empty or missing.";
+        }
+    }
+
+    // 2. Normal GitHub Read
     try {
         const { data } = await octokit.rest.repos.getContent({ owner: process.env.GITHUB_OWNER, repo: process.env.GITHUB_REPO, path: path });
         const content = Buffer.from(data.content, 'base64').toString('utf-8');
@@ -325,6 +335,25 @@ app.message(async ({ message, say }) => {
         // --- FAILSAFES (Regex Hunters) ---
         // (Kept strictly because you asked to maintain functionality, useful if Llama hallucinates text)
         if (finalReply && typeof finalReply === 'string') {
+            if (finalReply.trim().startsWith('{') && finalReply.includes('"name":')) {
+                try {
+                    const raw = JSON.parse(finalReply);
+                    // Map the raw JSON to the tool logic
+                    if (raw.name === 'update_memory') {
+                        await safeSay(`⚠️ (Auto-Fix) Updating Memory...`);
+                        // Handle different JSON formats Llama might use (parameters vs args)
+                        const params = raw.parameters || raw.arguments || raw;
+                        finalReply = await updateProjectMemory(params.key, params.value);
+                        await safeSay(finalReply);
+                    }
+                    else if (raw.name === 'create_ticket') {
+                        await safeSay(`⚠️ (Auto-Fix) Creating Ticket...`);
+                        const params = raw.parameters || raw.arguments || raw;
+                        finalReply = await createJiraTask(params.summary);
+                        await safeSay(finalReply);
+                    }
+                } catch (e) { console.log("JSON Parse fail:", e); }
+            }
             if (finalReply.includes('get_file_tree') && !toolCalls) {
                 await safeSay("⚠️ (Auto-Fix) Scanning file structure...");
                 finalReply = await getFileTree();
