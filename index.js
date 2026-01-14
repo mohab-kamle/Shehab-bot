@@ -47,17 +47,17 @@ function getGreeting() {
 
 function formatForSlack(text) {
     let clean = text
-        // Convert Bold: **text** -> *text*
-        .replace(/\*\*(.*?)\*\*/g, "*$1*")
-        // Convert Headers: ### Text -> *Text* (Slack has no H1/H2, use Bold)
-        .replace(/^### (.*$)/gm, "*$1*")
-        .replace(/^## (.*$)/gm, "*$1*")
-        // Convert Lists: * Item -> • Item
-        .replace(/^\* /gm, "• ");
+        // 1. Headers: Turn #, ##, ### into *Bold*
+        .replace(/^#+\s+(.*$)/gm, "*$1*")
 
-    // Replace Names with Tags
+        // 2. Bold: **text** -> *text*
+        .replace(/\*\*(.*?)\*\*/g, "*$1*")
+
+        // 3. Lists: Handle bullets (* or -) and indentation
+        .replace(/^\s*[\*\-]\s+/gm, "• ");
+
+    // 4. Mentions: Replace names with Slack Tags
     for (const [name, id] of Object.entries(TEAM_IDS)) {
-        // Regex looks for the name (case insensitive)
         const regex = new RegExp(`\\b${name}\\b`, 'gi');
         clean = clean.replace(regex, `<@${id}>`);
     }
@@ -119,36 +119,38 @@ async function generateDailyReport(channelId) {
     console.log("Generating Report...");
     try {
         const [prs, issues, files] = await Promise.all([getPullRequests(), getIssues(), getFileTree()]);
-        let mem = {};
-        try { mem = JSON.parse(fs.readFileSync('memory.json', 'utf8')); } catch (e) { }
+
+        // Pass the REAL DATE to the prompt
+        const today = new Date().toDateString();
 
         const prompt = `
-        You are Shehab, Project Manager.
-        Analyze the project to assign daily tasks.
+        You are Shehab, Project Manager. Today is ${today}.
+        Analyze the project state and assign tasks.
         
         TEAM: Mohab, Ziad, Kareem.
-        REPO:
-        1. PRs: ${prs}
-        2. Issues: ${issues}
-        3. Files: ${files}
+        REPO STATE:
+        - PRs: ${prs}
+        - Issues: ${issues}
+        - Files: ${files}
 
         INSTRUCTIONS:
         - Create a "Daily Plan".
-        - Assign 1 task to EACH person (Mohab, Ziad, Kareem).
-        - Use standard Markdown (I will convert it later).
-        - Use their NAMES explicitly so I can tag them.
+        - Assign 1 task to EACH person.
+        - Use standard Markdown (e.g. # Header, * Item).
+        - Use names explicitly (e.g. @Mohab) so I can tag them.
+        - Be concise.
         `;
 
         const result = await model.generateContent(prompt);
         let report = result.response.text();
 
-        // CONVERT FORMATTING & INJECT MENTIONS
+        // Convert Formatting
         const formattedReport = formatForSlack(report);
         const greeting = getGreeting();
 
         await app.client.chat.postMessage({
             channel: channelId,
-            text: `${greeting} Team! Daily Pulse`, // Fallback text
+            text: `${greeting} Team! Daily Pulse`,
             blocks: [
                 { type: "section", text: { type: "mrkdwn", text: `*${greeting} Team! Here is the plan:* \n\n${formattedReport}` } }
             ]
@@ -159,7 +161,6 @@ async function generateDailyReport(channelId) {
         return false;
     }
 }
-
 // --- SCHEDULE ---
 setInterval(async () => {
     const now = new Date();
