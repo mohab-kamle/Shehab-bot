@@ -4,7 +4,6 @@ const OpenAI = require("openai");
 const { Octokit } = require("octokit");
 const JiraClient = require("jira-client");
 const { search } = require('duck-duck-scrape');
-
 const fs = require('fs');
 
 // --- CONFIGURATION ---
@@ -22,7 +21,7 @@ const TEAM_IDS = {
     "Kareem": "U09JRSYTGCW"
 };
 
-const MODEL_ID = "meta-llama/llama-4-scout-17b-16e-instruct"; // or llama-3.3-70b
+const MODEL_ID = "meta-llama/llama-4-scout-17b-16e-instruct";
 
 const groq = new OpenAI({
     apiKey: process.env.GROQ_API_KEY,
@@ -125,8 +124,6 @@ async function searchWeb(query) {
     } catch (error) { return `Search Error: ${error.message}`; }
 }
 
-
-
 // --- TOOL DEFINITIONS ---
 const TOOLS_DEFINITION = [
     { type: "function", function: { name: "get_prs", description: "Get active Pull Requests", parameters: { type: "object", properties: {} } } },
@@ -138,13 +135,13 @@ const TOOLS_DEFINITION = [
     { type: "function", function: { name: "search_web", description: "Search internet", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
 ];
 
-// --- 🧠 THE AUTONOMY LOOP (The "Free Will") ---
+// --- 🧠 THE AUTONOMY LOOP ---
 async function runAutonomyLoop() {
     const now = new Date();
-    // Only wake up between 9 AM and 6 PM
+    // Wake up between 9 AM and 6 PM
     if (now.getHours() < 9 || now.getHours() > 18) return;
 
-    // 20% Chance to wake up every check (so he isn't annoying)
+    // 20% Chance to wake up
     if (Math.random() > 0.2) return;
 
     console.log("🤖 Shehab Waking Up (Autonomy Check)...");
@@ -155,19 +152,10 @@ async function runAutonomyLoop() {
 
     try {
         const [prs, issues] = await Promise.all([getPullRequests(), getIssues()]);
-
         const prompt = `
-        You are Shehab. It is ${now.toLocaleTimeString()}.
-        You are checking on the team autonomously.
-        
-        STATUS:
-        - PRs: ${prs}
-        - Issues: ${issues}
-
-        DECISION:
-        - If there is a "stale" PR (older than 2 days) or a critical issue, send a message to the team tagging the right person.
-        - If everything looks fine, stay silent (reply with "NO_ACTION").
-        - If you speak, keep it short, casual, and helpful. "Hey @Mohab, that PR looks lonely..."
+        You are Shehab. Checking team status autonomously.
+        STATUS: PRs: ${prs}, Issues: ${issues}.
+        DECISION: If issues/stale PRs exist, speak. Else "NO_ACTION".
         `;
 
         const completion = await groq.chat.completions.create({
@@ -176,37 +164,29 @@ async function runAutonomyLoop() {
         });
 
         const decision = completion.choices[0].message.content;
-
         if (!decision.includes("NO_ACTION")) {
             await app.client.chat.postMessage({
                 channel: mem.report_channel,
                 text: formatForSlack(decision)
             });
-            console.log("🗣️ Shehab spoke autonomously!");
-        } else {
-            console.log("🤫 Shehab decided to stay quiet.");
         }
-
     } catch (error) { console.error("Autonomy Error:", error); }
 }
 
 // --- SCHEDULE ---
-// 1. Daily Report (10 AM)
 setInterval(async () => {
     const now = new Date();
     if (now.getHours() === 10 && now.getMinutes() === 0 && lastReportDate !== now.toDateString()) {
         let mem = {};
         try { mem = JSON.parse(fs.readFileSync('memory.json', 'utf8')); } catch (e) { }
         if (mem.report_channel) {
-            // Reuse autonomy logic but force report generation (simplified here for brevity)
             await app.client.chat.postMessage({ channel: mem.report_channel, text: "☀️ Daily Report time!" });
             lastReportDate = now.toDateString();
         }
     }
 }, 60000);
 
-// 2. Autonomy Loop (Runs every 30 minutes)
-setInterval(runAutonomyLoop, 1800000); // 30 mins * 60 * 1000
+setInterval(runAutonomyLoop, 1800000);
 
 // --- USER RECOGNITION ---
 async function getOrRegisterUser(userId) {
@@ -223,10 +203,18 @@ async function getOrRegisterUser(userId) {
     } catch (error) { return "Unknown User"; }
 }
 
-// --- MAIN HANDLER ---
+// --- MAIN HANDLER (THREAD FIXED) ---
 app.message(async ({ message, say }) => {
     if (message.subtype === 'bot_message') return;
-    const safeSay = async (text) => { if (!text || !text.trim()) return; await say(formatForSlack(text)); };
+
+    // FIX: Always pass thread_ts if it exists
+    const safeSay = async (text) => {
+        if (!text || !text.trim()) return;
+        await say({
+            text: formatForSlack(text),
+            thread_ts: message.thread_ts // <--- THE KEY FIX
+        });
+    };
 
     if (message.text.toLowerCase().includes("set report channel")) { await updateProjectMemory("report_channel", message.channel); await safeSay(`✅ Reports set to this channel.`); return; }
 
@@ -240,17 +228,9 @@ app.message(async ({ message, say }) => {
         try { const f = JSON.parse(fs.readFileSync('memory.json', 'utf8')); mem = { ...mem, ...f }; } catch (e) { }
 
         const SYSTEM_PROMPT = `
-        You are Shehab, Senior PM for "Core Orbit" (Medical LIMS).
-        
-        IDENTITY:
-        - Pragmatic, Agile, "Gen Z" friendly.
-        - DOMAIN: Medical Lab Tech (HIPAA/GDPR is vital).
-        
-        RULES:
-        1. Use 'search_web' for unknown tech/standards.
-
-        3. Be proactive.
-        
+        You are Shehab, Senior PM for "Lab Manager System" (Medical LIMS).
+        IDENTITY: Pragmatic, Agile, "Gen Z" friendly.
+        RULES: Use 'search_web' for unknown tech. Be proactive.
         TOOLS: GitHub, Jira, Memory, DuckDuckGo.
         `;
 
@@ -296,7 +276,6 @@ app.message(async ({ message, say }) => {
             else if (fnName === "create_ticket") { await safeSay("📝 Creating Ticket..."); finalReply = await createJiraTask(args.summary); }
             else if (fnName === "update_memory") { await safeSay("💾 Saving..."); finalReply = await updateProjectMemory(args.key, args.value); }
 
-
             if (fnName !== "search_web") await safeSay(finalReply);
         }
 
@@ -320,4 +299,4 @@ app.message(async ({ message, say }) => {
     }
 });
 
-(async () => { await app.start(); console.log(`⚡️ Shehab V23 (Autonomous) is Online`); })();
+(async () => { await app.start(); console.log(`⚡️ Shehab V25 (Thread Fixed) is Online`); })();
