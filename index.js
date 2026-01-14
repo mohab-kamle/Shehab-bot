@@ -46,24 +46,25 @@ function getGreeting() {
 }
 
 function formatForSlack(text) {
-    let clean = text
-        // 1. Headers: Turn #, ##, ### into *Bold*
-        .replace(/^#+\s+(.*$)/gm, "*$1*")
+    let clean = text.replace(/\*\*(.*?)\*\*/g, "*$1*").replace(/^#+\s+(.*$)/gm, "*$1*").replace(/^\s*[\*\-]\s+/gm, "• ");
 
-        // 2. Bold: **text** -> *text*
-        .replace(/\*\*(.*?)\*\*/g, "*$1*")
+    // DYNAMIC TAGGING
+    let mem = {};
+    try { mem = JSON.parse(fs.readFileSync('memory.json', 'utf8')); } catch (e) { }
+    const users = mem.users || {};
 
-        // 3. Lists: Handle bullets (* or -) and indentation
-        .replace(/^\s*[\*\-]\s+/gm, "• ");
+    for (const [id, name] of Object.entries(users)) {
+        const regex = new RegExp(`\\b${name}\\b`, 'gi');
+        clean = clean.replace(regex, `<@${id}>`);
+    }
 
-    // 4. Mentions: Replace names with Slack Tags
+    // Also include your hardcoded TEAM_IDS as fallback if you want
     for (const [name, id] of Object.entries(TEAM_IDS)) {
         const regex = new RegExp(`\\b${name}\\b`, 'gi');
         clean = clean.replace(regex, `<@${id}>`);
     }
     return clean;
 }
-
 // --- TOOLS ---
 async function getPullRequests() {
     try {
@@ -174,7 +175,31 @@ setInterval(async () => {
         }
     }
 }, 60000);
+// --- USER RECOGNITION ---
+async function getOrRegisterUser(userId) {
+    let mem = {};
+    try { mem = JSON.parse(fs.readFileSync('memory.json', 'utf8')); } catch (e) { }
+    if (!mem.users) mem.users = {};
 
+    // 1. If we already know this person, return their name
+    if (mem.users[userId]) return mem.users[userId];
+
+    // 2. If new, ask Slack for their real name
+    try {
+        const userInfo = await app.client.users.info({ user: userId });
+        const realName = userInfo.user.real_name || userInfo.user.name;
+
+        // 3. Save to Memory
+        mem.users[userId] = realName;
+        fs.writeFileSync('memory.json', JSON.stringify(mem, null, 2));
+
+        console.log(`✨ Met a new person: ${realName} (${userId})`);
+        return realName;
+    } catch (error) {
+        console.error("Who is this?", error);
+        return "Unknown User";
+    }
+}
 // --- MAIN HANDLER ---
 app.message(async ({ message, say }) => {
     if (message.subtype === 'bot_message') return;
@@ -205,11 +230,18 @@ app.message(async ({ message, say }) => {
         let mem = { project_name: "Lab Manager", role_mohab: "Full Stack", role_ziad: "Frontend", role_kareem: "Backend" };
         try { const f = JSON.parse(fs.readFileSync('memory.json', 'utf8')); mem = { ...mem, ...f }; } catch (e) { }
 
+        // 1. IDENTIFY THE SPEAKER
+        const speakerName = await getOrRegisterUser(message.user);
+
         const SYSTEM_PROMPT = {
             role: "user",
             parts: [{
                 text: `
         You are Shehab, Project Manager.
+        
+        CURRENT CONTEXT:
+        - You are talking to: ${speakerName}
+        - Project Name: ${mem.project_name}
         TEAM: Mohab (${mem.role_mohab}), Ziad (${mem.role_ziad}), Kareem (${mem.role_kareem}).
         TOOLS: 'get_prs', 'get_issues', 'get_file_tree', 'read_file', 'create_ticket', 'update_memory'.
         IMPORTANT: Use the tools directly. If you cannot, print the function call text like: get_file_tree()
