@@ -29,8 +29,6 @@ const jira = new JiraClient({
 const CONVERSATIONS = {};
 
 // --- TOOLS ---
-
-// 1. GitHub
 async function getPullRequests() {
   try {
     const { data } = await octokit.rest.pulls.list({
@@ -38,12 +36,11 @@ async function getPullRequests() {
       repo: process.env.GITHUB_REPO,
       state: 'open'
     });
-    if (data.length === 0) return "No open PRs found.";
+    if (!data || data.length === 0) return "No open PRs found.";
     return data.map(pr => `- #${pr.number}: ${pr.title} (by ${pr.user.login})`).join("\n");
   } catch (error) { return `GitHub Error: ${error.message}`; }
 }
 
-// 2. Jira (Now supports auto-tagging in summary)
 async function createJiraTask(summary) {
   try {
     const issue = await jira.addNewIssue({
@@ -53,80 +50,63 @@ async function createJiraTask(summary) {
         issuetype: { name: 'Task' }
       }
     });
-    return `Created Jira Ticket ${issue.key}: https://${process.env.JIRA_HOST}/browse/${issue.key}`;
-  } catch (error) { return `Jira Error: ${error.message}`; }
+    // CRITICAL: Ensure this returns a string
+    return `✅ Ticket Created: ${issue.key}\nLink: https://${process.env.JIRA_HOST}/browse/${issue.key}`;
+  } catch (error) { return `❌ Jira Error: ${error.message}`; }
 }
 
-// 3. Memory Updater
 async function updateProjectMemory(key, value) {
   try {
     let currentMemory = {};
     try {
         currentMemory = JSON.parse(fs.readFileSync('memory.json', 'utf8'));
-    } catch (e) { console.log("Memory missing, creating new."); }
+    } catch (e) { } // Ignore read errors
 
     currentMemory[key] = value;
     fs.writeFileSync('memory.json', JSON.stringify(currentMemory, null, 2));
-    
-    return `✅ Memory Updated! Set '${key}' to: "${value}"`;
-  } catch (error) {
-    return `Failed to update memory: ${error.message}`;
-  }
+    return `💾 Memory Updated! Set '${key}' to: "${value}"`;
+  } catch (error) { return `Failed to update memory: ${error.message}`; }
 }
 
-// --- MAIN BOT LOGIC ---
+// --- MAIN LOGIC ---
 app.message(async ({ message, say }) => {
   if (message.subtype === 'bot_message') return;
-  console.log(`Processing from ${message.user}: ${message.text}`);
+  console.log(`User: ${message.text}`);
+
+  // Helper to prevent "no_text" errors
+  const safeSay = async (text) => {
+      if (!text || text.trim() === "") {
+          console.log("Empty text detected, skipping send.");
+          return;
+      }
+      await say(text);
+  };
 
   const contextId = message.thread_ts || message.channel;
   let history = CONVERSATIONS[contextId] || [];
   if (history.length > 20) history = history.slice(history.length - 20);
 
   try {
-    // 1. LOAD MEMORY & DEFAULTS
-    let mem = { 
-        project_name: "Lab Manager", 
-        role_mohab: "Full Stack Developer", 
-        role_ziad: "Frontend Developer", 
-        role_kareem: "Backend Developer" 
-    };
+    // 1. Load Memory
+    let mem = { project_name: "Lab Manager", role_mohab: "Full Stack", role_ziad: "Frontend", role_kareem: "Backend" };
     try {
         const fileData = JSON.parse(fs.readFileSync('memory.json', 'utf8'));
-        mem = { ...mem, ...fileData }; // Merge defaults with actual file
+        mem = { ...mem, ...fileData };
     } catch (e) { }
 
-    // 2. THE TEAM AWARE PROMPT
+    // 2. System Prompt
     const SYSTEM_PROMPT = {
       role: "user",
       parts: [{ text: `
-        You are Shehab, the Project Manager for ${mem.project_name}.
+        You are Shehab, Project Manager for ${mem.project_name}.
+        TEAM: Mohab (${mem.role_mohab}), Ziad (${mem.role_ziad}), Kareem (${mem.role_kareem}).
         
-        CURRENT TEAM ROLES (From Memory):
-        - Mohab: ${mem.role_mohab}
-        - Ziad: ${mem.role_ziad}
-        - Kareem: ${mem.role_kareem}
-
-        PROJECT STATE:
-        - Goal: ${mem.sprint_goal || "Not set"}
-
-        TOOLS:
-        1. 'get_prs' -> Check GitHub.
-        2. 'create_ticket' -> Add to Jira (REQUIRES CONFIRMATION).
-        3. 'update_memory' -> Update goals OR roles (e.g., key='role_ziad', value='Full Stack').
-
+        TOOLS: 'get_prs', 'create_ticket', 'update_memory'.
+        
         RULES:
-        1. **AUTO-ASSIGNMENT:** When a user suggests a task, analyze it.
-           - If it's Frontend/UI -> Assign to Ziad.
-           - If it's Backend/API/DB -> Assign to Kareem.
-           - If it's Complex/Architectural -> Assign to Mohab.
-           - **How to Assign:** Prepend the name to the summary. Example: "[Ziad] Fix CSS Button".
-
-        2. **CONFIRMATION:** Always ask: "Shall I create a task for [Name]: 'Task Summary'?"
-        
-        3. **ROLE CHANGES:** If told "Ziad is now Full Stack", use 'update_memory' with key='role_ziad'.
-
-        4. **FALLBACK:** If tool fails, print: create_ticket("[Ziad] Task Name")
+        - Auto-assign tasks by adding "[Name]" to the summary.
+        - CONFIRM before creating tasks.
+        - If tool fails, output text: create_ticket("[Name] Task")
       `}]
     };
 
@@ -143,7 +123,12 @@ app.message(async ({ message, say }) => {
 
     const result = await chat.sendMessage(message.text);
     const response = await result.response;
-    const textResponse = response.text();
+    
+    // Get text safely
+    let textResponse = "";
+    try { textResponse = response.text(); } catch (e) { textResponse = ""; }
+    
+    // Save user message
     history.push({ role: "user", parts: [{ text: message.text }] });
 
     // --- EXECUTION ---
@@ -151,56 +136,66 @@ app.message(async ({ message, say }) => {
     let finalReply = textResponse;
 
     if (functionCallPart) {
+      // NATIVE TOOL CALL
       const call = functionCallPart.functionCall;
-      
+      console.log(`Tool Call: ${call.name}`);
+
       if (call.name === "get_prs") {
-        await say("👀 Checking GitHub...");
+        await safeSay("👀 Checking GitHub...");
         finalReply = await getPullRequests();
       } 
       else if (call.name === "create_ticket") {
-        await say("📝 Action Confirmed. Writing to Jira...");
+        await safeSay("📝 creating ticket...");
         finalReply = await createJiraTask(call.args.summary);
       }
       else if (call.name === "update_memory") {
-        await say("💾 Updating Team Memory...");
+        await safeSay("💾 Updating...");
         finalReply = await updateProjectMemory(call.args.key, call.args.value);
       }
       
-      await say(finalReply);
+      await safeSay(finalReply);
     } 
-    // FAILSAFES (Regex Hunters)
-    else if (textResponse.includes('update_memory')) {
-        const match = textResponse.match(/update_memory\s*\(\s*["'](.*?)["']\s*,\s*["'](.*?)["']\s*\)/);
-        if (match) {
-             await say(`⚠️ (Auto-Fix) Updating ${match[1]}...`);
-             finalReply = await updateProjectMemory(match[1], match[2]);
-             await say(finalReply);
-        } else await say(textResponse);
-    }
+    // FAILSAFE: REGEX HUNTERS
     else if (textResponse.includes('create_ticket')) {
         const match = textResponse.match(/create_ticket\s*\(\s*["'](.*?)["']\s*\)/);
         if (match) {
-            await say(`⚠️ (Auto-Fix) Creating task...`);
+            await safeSay(`⚠️ (Auto-Fix) Creating task: "${match[1]}"...`);
             finalReply = await createJiraTask(match[1]);
-            await say(finalReply);
-        } else await say(textResponse);
+            await safeSay(finalReply);
+        } else {
+            await safeSay(textResponse);
+        }
+    }
+    else if (textResponse.includes('update_memory')) {
+        const match = textResponse.match(/update_memory\s*\(\s*["'](.*?)["']\s*,\s*["'](.*?)["']\s*\)/);
+        if (match) {
+             await safeSay(`⚠️ (Auto-Fix) Updating ${match[1]}...`);
+             finalReply = await updateProjectMemory(match[1], match[2]);
+             await safeSay(finalReply);
+        } else await safeSay(textResponse);
     }
     else if (textResponse.includes('get_prs')) {
-         await say("⚠️ (Auto-Fix) Checking GitHub...");
+         await safeSay("⚠️ (Auto-Fix) Checking GitHub...");
          finalReply = await getPullRequests();
-         await say(finalReply);
+         await safeSay(finalReply);
     } 
     else {
-      await say(textResponse);
+      // NORMAL CHAT
+      if (finalReply) {
+          await safeSay(finalReply);
+      } else {
+          // If Gemini sent NOTHING (just internal thought), send a default so we don't crash
+          await safeSay("✅ Done.");
+      }
     }
 
-    history.push({ role: "model", parts: [{ text: finalReply }] });
+    history.push({ role: "model", parts: [{ text: finalReply || "Done" }] });
     CONVERSATIONS[contextId] = history;
 
   } catch (error) {
-    console.error(error);
-    await say(`Error: ${error.message}`);
+    console.error("CRITICAL ERROR:", error);
+    await safeSay(`System Error: ${error.message}`);
   }
 });
 
-(async () => { await app.start(); console.log('⚡️ Shehab V5 (Team Lead) is Online'); })();
+(async () => { await app.start(); console.log('⚡️ Shehab V7 (Safe Mode) is Online'); })();
