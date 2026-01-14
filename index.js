@@ -201,12 +201,12 @@ async function getOrRegisterUser(userId) {
     }
 }
 // --- MAIN HANDLER ---
+// --- MAIN HANDLER ---
 app.message(async ({ message, say }) => {
     if (message.subtype === 'bot_message') return;
 
     const safeSay = async (text) => {
         if (!text || text.trim() === "") return;
-        // Convert formatting before sending normal replies too!
         await say(formatForSlack(text));
     };
 
@@ -227,24 +227,33 @@ app.message(async ({ message, say }) => {
     if (history.length > 20) history = history.slice(history.length - 20);
 
     try {
+        // 1. IDENTIFY THE SPEAKER (The crucial step)
+        const speakerName = await getOrRegisterUser(message.user);
+        console.log(`🗣️ Speaker identified as: ${speakerName}`);
+
         let mem = { project_name: "Lab Manager", role_mohab: "Full Stack", role_ziad: "Frontend", role_kareem: "Backend" };
         try { const f = JSON.parse(fs.readFileSync('memory.json', 'utf8')); mem = { ...mem, ...f }; } catch (e) { }
-
-        // 1. IDENTIFY THE SPEAKER
-        const speakerName = await getOrRegisterUser(message.user);
 
         const SYSTEM_PROMPT = {
             role: "user",
             parts: [{
                 text: `
-        You are Shehab, Project Manager.
+        You are Shehab, the Project Manager.
         
-        CURRENT CONTEXT:
-        - You are talking to: ${speakerName}
-        - Project Name: ${mem.project_name}
-        TEAM: Mohab (${mem.role_mohab}), Ziad (${mem.role_ziad}), Kareem (${mem.role_kareem}).
+        WHO YOU ARE TALKING TO:
+        You are currently speaking with **${speakerName}**.
+        (If the name is "Mohab", "Ziad", or "Kareem", treat them as your team member).
+
+        CONTEXT:
+        - Project: ${mem.project_name}
+        - Team: Mohab (Full Stack), Ziad (Frontend), Kareem (Backend).
+        
         TOOLS: 'get_prs', 'get_issues', 'get_file_tree', 'read_file', 'create_ticket', 'update_memory'.
-        IMPORTANT: Use the tools directly. If you cannot, print the function call text like: get_file_tree()
+        
+        INSTRUCTIONS:
+        - Acknowledge the user by name if appropriate.
+        - If asked "Do you know me?", answer "Yes, you are ${speakerName}."
+        - Use the tools directly. If you cannot, print the function call text like: get_file_tree()
       `}]
         };
 
@@ -355,4 +364,4 @@ app.message(async ({ message, say }) => {
     }
 });
 
-(async () => { await app.start(); console.log('⚡️ Shehab V10 (Formatted & Tagged) is Online'); })();
+(async () => { await app.start(); console.log('⚡️ Shehab V11 (Formatted & Tagged) is Online'); })();
