@@ -2,7 +2,7 @@ require('dotenv').config();
 const OpenAI = require("openai");
 
 // Import our tools
-const { getPullRequests, getIssues, getFileTree, readFileContent, createNewFile } = require('../tools/github');
+const { getPullRequests, getIssues, getFileTree, readFileContent, createNewFile, getPullRequestDiff } = require('../tools/github');
 const { createJiraTask } = require('../tools/jira');
 const { searchWeb } = require('../tools/web');
 
@@ -100,6 +100,20 @@ const TOOLS_DEF = [
                 required: ["query"]
             }
         }
+    },
+    {
+        type: "function",
+        function: {
+            name: "review_pr",
+            description: "Get the code diff for a specific PR to review it for bugs, security issues, and code quality.",
+            parameters: {
+                type: "object",
+                properties: {
+                    pr_number: { type: "integer", description: "The PR number to review" }
+                },
+                required: ["pr_number"]
+            }
+        }
     }
 ];
 
@@ -122,6 +136,9 @@ async function executeTool(name, args) {
             return await createJiraTask(args.summary);
         case "search_web":
             return await searchWeb(args.query);
+        case "review_pr":
+            const diff = await getPullRequestDiff(args.pr_number);
+            return `[CODE DIFF FOR PR #${args.pr_number}]:\n${diff}\n\nINSTRUCTION: Analyze this code for 1. Bugs, 2. Security Risks (SQLi, XSS, etc), 3. Code Style issues. Be specific and reference file names and line changes.`;
         default:
             return `Unknown tool: ${name}`;
     }

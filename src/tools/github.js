@@ -102,10 +102,36 @@ async function createNewFile(path, content, message) {
     }
 }
 
+/**
+ * Get the code diff for a specific PR (for code review).
+ * @param {number} prNumber
+ */
+async function getPullRequestDiff(prNumber) {
+    try {
+        const { data } = await octokit.rest.pulls.get({
+            owner: OWNER,
+            repo: REPO,
+            pull_number: prNumber,
+            mediaType: {
+                format: "diff" // Ask GitHub for the raw code changes
+            }
+        });
+
+        // If the diff is huge, truncate it to avoid crashing the Brain
+        if (data.length > 15000) {
+            return `[WARNING] Diff is too large (${data.length} chars). Here are the first 15,000 chars:\n\n${data.substring(0, 15000)}...`;
+        }
+        return data;
+    } catch (e) {
+        return `GitHub Diff Error: ${e.message}`;
+    }
+}
+
 module.exports = {
     getPullRequests,
     getIssues,
     getFileTree,
     readFileContent,
-    createNewFile
+    createNewFile,
+    getPullRequestDiff
 };

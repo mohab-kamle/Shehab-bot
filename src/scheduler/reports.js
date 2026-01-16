@@ -14,46 +14,65 @@ const groq = new OpenAI({
 
 const MODEL_ID = "meta-llama/llama-4-scout-17b-16e-instruct";
 
-// System prompt for PM analysis
+/**
+ * Format text for Slack (same as index.js)
+ */
+function formatForSlack(text) {
+    if (!text) return "";
+    // Convert markdown bold to Slack bold, headers to bold
+    let clean = text
+        .replace(/\*\*(.*?)\*\*/g, "*$1*")
+        .replace(/^#+\s+(.*$)/gm, "*$1*")
+        .replace(/^\s*[\*\-]\s+/gm, "• ");
+
+    // Replace @username mentions with actual Slack IDs
+    clean = clean
+        .replace(/@ziad/gi, `<@${TEAM.ziad.slackId}>`)
+        .replace(/@mohab/gi, `<@${TEAM.mohab.slackId}>`)
+        .replace(/@kareem/gi, `<@${TEAM.kareem.slackId}>`);
+
+    return clean;
+}
+
+// System prompt for PM analysis (Slack formatted)
 const PM_SYSTEM_PROMPT = `You are Shehab, a Senior Technical PM for ${PROJECT.name}.
 
 PROJECT GOAL: ${PROJECT.goal}
 METHODOLOGY: ${PROJECT.methodology}
 
-TEAM:
-- Ziad (Frontend): React, UI/UX, CSS
-- Mohab (Full Stack/DevOps): Docker, APIs, Infrastructure
-- Kareem (Backend): Node.js, Database, Server-side
+TEAM (use these EXACT Slack mentions):
+- <@${TEAM.ziad.slackId}> = Ziad (Frontend: React, UI/UX, CSS)
+- <@${TEAM.mohab.slackId}> = Mohab (Full Stack/DevOps: Docker, APIs, Infrastructure)
+- <@${TEAM.kareem.slackId}> = Kareem (Backend: Node.js, Database, Server-side)
 
 YOUR TASK:
-Analyze the project status and create a detailed PM report. Be like a real human PM who:
-1. Prioritizes based on Agile best practices
-2. Identifies blockers and risks
-3. Suggests actionable tasks for team members
-4. Gives a health score (1-10) for the project
+Analyze the project status and create a detailed PM report using SLACK FORMATTING:
+- Use *bold* (single asterisks) NOT **bold**
+- Use bullet points with •
+- Tag team members using their EXACT Slack mentions above
 
-OUTPUT FORMAT (use exactly this structure):
-📊 **Daily Status Report**
+OUTPUT FORMAT:
+📊 *Daily Status Report*
 
-**🎯 Project Health: X/10**
+*🎯 Project Health: X/10*
 [Brief assessment]
 
-**🔥 Priority Items:**
-1. [Most critical item - mention who should handle it]
-2. [Second priority]
+*🔥 Priority Items:*
+• [Most critical item]
+• [Second priority]
 
-**📋 Suggested Tasks:**
-- @ziad: [frontend task if any]
-- @mohab: [fullstack/devops task if any]  
-- @kareem: [backend task if any]
+*📋 Suggested Tasks:*
+• <@${TEAM.ziad.slackId}>: [frontend task if any]
+• <@${TEAM.mohab.slackId}>: [fullstack/devops task if any]
+• <@${TEAM.kareem.slackId}>: [backend task if any]
 
-**⚠️ Risks/Blockers:**
+*⚠️ Risks/Blockers:*
 [Any concerns]
 
-**💡 PM Notes:**
+*💡 PM Notes:*
 [Your analysis and recommendations]
 
-Be concise but insightful. Tag team members with their Slack handles.`;
+Be concise but insightful.`;
 
 /**
  * Generate an AI-analyzed PM report
@@ -110,10 +129,13 @@ Based on this data, create your PM report. Remember to tag team members:
 
         const report = completion.choices[0].message.content || "Unable to generate report.";
 
+        // Format for Slack (convert ** to *, fix mentions)
+        const formattedReport = formatForSlack(report);
+
         // Send the report to Slack
         await slackApp.client.chat.postMessage({
             channel: channel,
-            text: report,
+            text: formattedReport,
             unfurl_links: false
         });
 
@@ -182,13 +204,6 @@ function startScheduler(slackApp) {
     // Every 2 days at 11:00 AM
     cron.schedule('0 11 */2 * *', () => generateSmartReport(slackApp));
     console.log("📅 Scheduler started: Smart PM Reports every 2 days at 11:00 AM");
-
-    // One-time test run 10 seconds after startup (DELETE THIS AFTER TESTING)
-    setTimeout(() => {
-        console.log("🧪 Running one-time test report...");
-        generateSmartReport(slackApp);
-    }, 10 * 1000);
-    console.log("⏰ Test report scheduled in 10 seconds");
 }
 
 module.exports = { startScheduler, generateSmartReport };
