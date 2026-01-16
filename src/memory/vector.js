@@ -50,9 +50,9 @@ async function recallMemory(query) {
 
         if (!result.matches.length) return "";
 
-        // Format memories as text
+        // Format memories as text - only return high confidence matches (75%+)
         return result.matches
-            .filter(m => m.score > 0.4) // Only reliable matches
+            .filter(m => m.score > 0.75) // Raised from 0.4 to prevent noise
             .map(m => `- ${m.metadata.text} (Date: ${m.metadata.created_at.split('T')[0]})`)
             .join("\n");
     } catch (e) {
