@@ -1,5 +1,5 @@
 require('dotenv').config();
-const gh = require('./src/tools/github');
+const gh = require('../src/tools/github');
 
 async function test() {
     console.log("Testing getIssues...");
