@@ -5,6 +5,7 @@ const { App } = require('@slack/bolt');
 const { thinkAndAct } = require('./src/agent/brain');
 const { analyzeImage } = require('./src/tools/vision');
 const memory = require('./src/utils/memory');
+const { startScheduler } = require('./src/scheduler/reports');
 
 // --- SLACK APP ---
 const app = new App({
@@ -145,4 +146,5 @@ app.message(/set report channel/i, async ({ message, say }) => {
 (async () => {
     await app.start();
     console.log("⚡️ Shehab V3 (Modular) is Online");
+    startScheduler(app);
 })();
