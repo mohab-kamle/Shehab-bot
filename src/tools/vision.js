@@ -20,11 +20,10 @@ async function analyzeImage(imageUrl, prompt, token) {
             },
         };
 
-        // 2. Use Gemini 1.5 Flash on the V1BETA endpoint
-        // The error happened because it defaulted to 'v1'. We force 'v1beta'.
+        // 2. Use Gemini 2.0 Flash (1.5 no longer exists in the API!)
         const model = genAI.getGenerativeModel({
-            model: "gemini-1.5-flash",
-        }, { apiVersion: 'v1beta' }); // <--- THIS IS THE CRITICAL FIX
+            model: "gemini-2.0-flash",
+        }, { apiVersion: 'v1beta' });
 
         const result = await model.generateContent([
             prompt || "Describe this image technically. If it's code, explain the bug.",
