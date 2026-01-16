@@ -78,7 +78,7 @@ async function getOpenJiraIssues() {
     try {
         const jql = `project = ${PROJECT_KEY} AND status != Done ORDER BY created DESC`;
         const response = await axios.get(
-            `https://${JIRA_HOST}/rest/api/3/search?jql=${encodeURIComponent(jql)}&maxResults=20`,
+            `https://${JIRA_HOST}/rest/api/2/search?jql=${encodeURIComponent(jql)}&maxResults=20`,
             {
                 headers: {
                     'Authorization': `Basic ${auth}`,
@@ -88,7 +88,7 @@ async function getOpenJiraIssues() {
         );
         return response.data.issues || [];
     } catch (e) {
-        console.error("Jira fetch error:", e.message);
+        console.error("Jira fetch error:", e.response?.status || e.message);
         return [];
     }
 }

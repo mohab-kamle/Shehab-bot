@@ -1,9 +1,18 @@
 const cron = require('node-cron');
+const OpenAI = require('openai');
 const memory = require('../utils/memory');
 const { getPullRequests, getIssues } = require('../tools/github');
 const { createJiraTaskWithAssignee, getOpenJiraIssues } = require('../tools/jira');
 const { TEAM, PROJECT, findBestAssignee } = require('../config/team');
-const { thinkAndAct } = require('../agent/brain');
+require('dotenv').config();
+
+// Direct Groq client for report generation (no tools)
+const groq = new OpenAI({
+    apiKey: process.env.GROQ_API_KEY,
+    baseURL: "https://api.groq.com/openai/v1"
+});
+
+const MODEL_ID = "meta-llama/llama-4-scout-17b-16e-instruct";
 
 // System prompt for PM analysis
 const PM_SYSTEM_PROMPT = `You are Shehab, a Senior Technical PM for ${PROJECT.name}.
@@ -90,8 +99,16 @@ Based on this data, create your PM report. Remember to tag team members:
 - <@${TEAM.kareem.slackId}> for Kareem (Backend)
 `;
 
-        // Get AI analysis
-        const report = await thinkAndAct([], projectContext, PM_SYSTEM_PROMPT);
+        // Get AI analysis (direct call, no tools)
+        const completion = await groq.chat.completions.create({
+            model: MODEL_ID,
+            messages: [
+                { role: "system", content: PM_SYSTEM_PROMPT },
+                { role: "user", content: projectContext }
+            ]
+        });
+
+        const report = completion.choices[0].message.content || "Unable to generate report.";
 
         // Send the report to Slack
         await slackApp.client.chat.postMessage({
