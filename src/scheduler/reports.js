@@ -4,7 +4,7 @@ const memory = require('../utils/memory');
 const { getPullRequests, getIssues } = require('../tools/github');
 const { createJiraTaskWithAssignee, getOpenJiraIssues } = require('../tools/jira');
 const { TEAM, PROJECT } = require('../config/team');
-const { calculateMood, getProjectStress } = require('./life');
+const { calculateMood, getProjectStress } = require('../agent/life');
 require('dotenv').config();
 
 // Direct Groq client for report generation (no tools)
