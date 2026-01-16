@@ -89,7 +89,8 @@ app.message(async ({ message, say }) => {
 
             if (imageFile) {
                 await safeSay("👁️ Analyzing image...");
-                const imageUrl = imageFile.url_private;
+                // Use url_private_download if available (direct download link)
+                const imageUrl = imageFile.url_private_download || imageFile.url_private;
                 const visionPrompt = userInput || "Describe this image in detail.";
 
                 const analysis = await analyzeImage(

@@ -2,19 +2,31 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const axios = require('axios');
 require('dotenv').config();
 
-// Initialize with v1beta endpoint
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 async function analyzeImage(imageUrl, prompt, token) {
     try {
+        console.log(`📸 Vision: Downloading from ${imageUrl.substring(0, 60)}...`);
+
         const response = await axios.get(imageUrl, {
-            headers: { Authorization: `Bearer ${token}` },
-            responseType: 'arraybuffer'
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Accept': 'image/*'
+            },
+            responseType: 'arraybuffer',
+            maxRedirects: 5,
+            validateStatus: (status) => status < 400
         });
 
-        // Detect actual MIME type from response headers (Slack can serve various formats)
+        // Detect actual MIME type from response headers
         const contentType = response.headers['content-type'] || 'image/png';
-        const mimeType = contentType.split(';')[0].trim(); // Remove charset if present
+        const mimeType = contentType.split(';')[0].trim();
+
+        // Check if we actually got an image (not HTML error page)
+        if (mimeType.startsWith('text/') || mimeType === 'application/json') {
+            console.error(`❌ VISION ERROR: Slack returned ${mimeType} instead of an image. Auth may have failed.`);
+            return `[System Message]: Could not download the image (received ${mimeType}). Inform the user the vision feature is temporarily unavailable.`;
+        }
 
         console.log(`📸 Vision: Processing image (${mimeType}, ${response.data.length} bytes)`);
 
@@ -39,7 +51,7 @@ async function analyzeImage(imageUrl, prompt, token) {
 
     } catch (e) {
         console.error("❌ VISION ERROR:", e.message);
-        return `[System Message]: Vision tool is currently unavailable. Just inform the user you can't see the image right now. Do NOT search the web for this error.`;
+        return `[System Message]: Vision tool unavailable. Inform the user you cannot see the image right now.`;
     }
 }
 
