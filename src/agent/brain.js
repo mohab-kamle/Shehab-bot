@@ -109,7 +109,7 @@ const TOOLS_DEF = [
             parameters: {
                 type: "object",
                 properties: {
-                    pr_number: { type: "integer", description: "The PR number to review" }
+                    pr_number: { type: "number", description: "The PR number to review (e.g., 35)" }
                 },
                 required: ["pr_number"]
             }
