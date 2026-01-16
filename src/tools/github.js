@@ -10,16 +10,14 @@ const REPO = process.env.GITHUB_REPO;
  */
 async function getPullRequests() {
     try {
-        const { data } = await octokit.rest.pulls.list({
-            owner: OWNER,
-            repo: REPO,
-            state: 'open'
-        });
-        if (!data || data.length === 0) return "No open PRs.";
-        return data.map(pr => `- [PR #${pr.number}] ${pr.title} (Author: ${pr.user.login})`).join("\n");
-    } catch (error) {
-        return `GitHub Error: ${error.message}`;
-    }
+        const { data } = await octokit.rest.pulls.list({ owner: OWNER, repo: REPO, state: 'open' });
+        if (!data.length) return "No open PRs.";
+
+        // NOW INCLUDES BODY (Description)
+        return data.map(pr =>
+            `- [PR #${pr.number}] ${pr.title} (Author: ${pr.user.login})\n  Summary: ${pr.body ? pr.body.substring(0, 200) : "No description provided."}...`
+        ).join("\n\n");
+    } catch (e) { return `GitHub Error: ${e.message}`; }
 }
 
 /**
