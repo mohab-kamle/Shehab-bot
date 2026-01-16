@@ -173,16 +173,55 @@ async function runAutonomyLoop() {
     } catch (error) { console.error("Autonomy Error:", error); }
 }
 
+// --- DAILY REPORT ---
+async function generateDailyReport() {
+    let mem = {};
+    try { mem = JSON.parse(fs.readFileSync('memory.json', 'utf8')); } catch (e) { }
+    if (!mem.report_channel) return;
+
+    try {
+        await app.client.chat.postMessage({ channel: mem.report_channel, text: "☀️ *Morning! Generating Daily Report...*" });
+
+        const [prs, issues] = await Promise.all([getPullRequests(), getIssues()]);
+        const prompt = `
+        Generate a 'Morning Briefing' for the team.
+        Make it energetic and concise.
+        
+        Here is the current status:
+        - Open PRs:
+        ${prs}
+        
+        - Open Issues:
+        ${issues}
+        
+        Format it nicely for Slack (bolding, lists).
+        If there are no items, say "All clear! No pending items."
+        `;
+
+        const completion = await groq.chat.completions.create({
+            model: MODEL_ID,
+            messages: [{ role: "user", content: prompt }]
+        });
+
+        const report = completion.choices[0].message.content;
+        await app.client.chat.postMessage({
+            channel: mem.report_channel,
+            text: formatForSlack(report)
+        });
+
+    } catch (error) {
+        console.error("Daily Report Error:", error);
+        await app.client.chat.postMessage({ channel: mem.report_channel, text: `❌ Report Failed: ${error.message}` });
+    }
+}
+
 // --- SCHEDULE ---
 setInterval(async () => {
     const now = new Date();
-    if (now.getHours() === 10 && now.getMinutes() === 0 && lastReportDate !== now.toDateString()) {
-        let mem = {};
-        try { mem = JSON.parse(fs.readFileSync('memory.json', 'utf8')); } catch (e) { }
-        if (mem.report_channel) {
-            await app.client.chat.postMessage({ channel: mem.report_channel, text: "☀️ Daily Report time!" });
-            lastReportDate = now.toDateString();
-        }
+    // Test Time: 14:39
+    if (now.getHours() === 14 && now.getMinutes() === 39 && lastReportDate !== now.toDateString()) {
+        lastReportDate = now.toDateString();
+        await generateDailyReport();
     }
 }, 60000);
 
