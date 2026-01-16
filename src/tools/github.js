@@ -13,10 +13,11 @@ async function getPullRequests() {
         const { data } = await octokit.rest.pulls.list({ owner: OWNER, repo: REPO, state: 'open' });
         if (!data.length) return "No open PRs.";
 
-        // NOW INCLUDES BODY (Description)
-        return data.map(pr =>
-            `- [PR #${pr.number}] ${pr.title} (Author: ${pr.user.login})\n  Summary: ${pr.body ? pr.body.substring(0, 200) : "No description provided."}...`
-        ).join("\n\n");
+        // Fix: Include the 'body' (Description) so Shehab doesn't search Google for it.
+        return data.map(pr => {
+            const description = pr.body ? pr.body.replace(/[\r\n]+/g, ' ').substring(0, 200) : "No description.";
+            return `- [PR #${pr.number}] ${pr.title} (Author: ${pr.user.login})\n  Summary: ${description}...`;
+        }).join("\n\n");
     } catch (e) { return `GitHub Error: ${e.message}`; }
 }
 
