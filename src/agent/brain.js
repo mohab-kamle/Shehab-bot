@@ -6,6 +6,9 @@ const { getPullRequests, getIssues, getFileTree, readFileContent, createNewFile 
 const { createJiraTask } = require('../tools/jira');
 const { searchWeb } = require('../tools/web');
 
+// Import Long-Term Memory
+const memory = require('../memory/vector');
+
 // --- GROQ CLIENT (using OpenAI SDK) ---
 const groq = new OpenAI({
     apiKey: process.env.GROQ_API_KEY,
@@ -145,10 +148,23 @@ async function thinkAndAct(history, userMessage, systemPrompt = null) {
     TOOLS: GitHub, Jira, DuckDuckGo.
     `;
 
+    // 1. RECALL: Check Long-Term Memory
+    console.log("🧠 Searching memories...");
+    let contextString = "";
+    try {
+        const pastMemories = await memory.recallMemory(userMessage);
+        if (pastMemories) {
+            console.log("💡 Found relevant memories!");
+            contextString = `\n\n[RELEVANT PAST MEMORIES]:\n${pastMemories}\nUse these memories to answer if needed.`;
+        }
+    } catch (e) {
+        console.log("Memory recall skipped:", e.message);
+    }
+
     const messages = [
         { role: "system", content: systemPrompt || defaultSystemPrompt },
         ...history,
-        { role: "user", content: userMessage }
+        { role: "user", content: userMessage + contextString }
     ];
 
     try {
@@ -165,7 +181,10 @@ async function thinkAndAct(history, userMessage, systemPrompt = null) {
 
         // If no tool calls, return the text directly
         if (!toolCalls || toolCalls.length === 0) {
-            return responseMessage.content || "I'm not sure how to respond.";
+            const reply = responseMessage.content || "I'm not sure how to respond.";
+            // Save this interaction to memory
+            memory.saveMemory(`User: ${userMessage}\nShehab: ${reply}`).catch(() => { });
+            return reply;
         }
 
         // Execute each tool call and collect results
@@ -201,7 +220,12 @@ async function thinkAndAct(history, userMessage, systemPrompt = null) {
             messages: followUpMessages
         });
 
-        return followUp.choices[0].message.content || "Done.";
+        const finalReply = followUp.choices[0].message.content || "Done.";
+
+        // SAVE: Store the interaction in Long-Term Memory (runs in background)
+        memory.saveMemory(`User: ${userMessage}\nShehab: ${finalReply}`).catch(() => { });
+
+        return finalReply;
 
     } catch (error) {
         console.error("🧠 Brain Error:", error);
