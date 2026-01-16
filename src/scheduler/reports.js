@@ -3,7 +3,8 @@ const OpenAI = require('openai');
 const memory = require('../utils/memory');
 const { getPullRequests, getIssues } = require('../tools/github');
 const { createJiraTaskWithAssignee, getOpenJiraIssues } = require('../tools/jira');
-const { TEAM, PROJECT, findBestAssignee } = require('../config/team');
+const { TEAM, PROJECT } = require('../config/team');
+const { calculateMood, getProjectStress } = require('./life');
 require('dotenv').config();
 
 // Direct Groq client for report generation (no tools)
@@ -15,17 +16,15 @@ const groq = new OpenAI({
 const MODEL_ID = "meta-llama/llama-4-scout-17b-16e-instruct";
 
 /**
- * Format text for Slack (same as index.js)
+ * Format text for Slack
  */
 function formatForSlack(text) {
     if (!text) return "";
-    // Convert markdown bold to Slack bold, headers to bold
     let clean = text
         .replace(/\*\*(.*?)\*\*/g, "*$1*")
         .replace(/^#+\s+(.*$)/gm, "*$1*")
         .replace(/^\s*[\*\-]\s+/gm, "• ");
 
-    // Replace @username mentions with actual Slack IDs
     clean = clean
         .replace(/@ziad/gi, `<@${TEAM.ziad.slackId}>`)
         .replace(/@mohab/gi, `<@${TEAM.mohab.slackId}>`)
@@ -34,8 +33,8 @@ function formatForSlack(text) {
     return clean;
 }
 
-// System prompt for PM analysis (Slack formatted)
-const PM_SYSTEM_PROMPT = `You are Shehab, a Senior Technical PM for ${PROJECT.name}.
+// Base PM System Prompt
+const BASE_PM_PROMPT = `You are Shehab, a Senior Technical PM for ${PROJECT.name}.
 
 PROJECT GOAL: ${PROJECT.goal}
 METHODOLOGY: ${PROJECT.methodology}
@@ -75,7 +74,7 @@ OUTPUT FORMAT:
 Be concise but insightful.`;
 
 /**
- * Generate an AI-analyzed PM report
+ * Generate an AI-analyzed PM report with dynamic mood
  */
 async function generateSmartReport(slackApp) {
     const channel = memory.get('report_channel');
@@ -91,6 +90,19 @@ async function generateSmartReport(slackApp) {
         const prs = await getPullRequests();
         const issues = await getIssues();
         const jiraIssues = await getOpenJiraIssues();
+
+        // Get stress data from life.js
+        const { stalePRs, staleTickets } = await getProjectStress();
+
+        // Count issues for mood calculation
+        const issueCount = (issues.match(/\[Issue/g) || []).length;
+
+        // Calculate mood using life.js
+        const mood = calculateMood(issueCount, stalePRs, staleTickets);
+        console.log(`🎭 Mood: ${mood.level} ${mood.emoji} (Issues: ${issueCount}, Stale PRs: ${stalePRs}, Stale Tickets: ${staleTickets})`);
+
+        // Dynamic prompt with mood
+        const DYNAMIC_PROMPT = BASE_PM_PROMPT + "\n\n" + mood.prompt;
 
         // Format Jira issues
         const jiraSummary = jiraIssues.length > 0
@@ -110,26 +122,25 @@ ${issues}
 JIRA TICKETS:
 ${jiraSummary}
 
+STALE ITEMS (needs attention):
+- Stale PRs (3+ days old): ${stalePRs}
+- Stale Jira tickets (5+ days in Development): ${staleTickets}
+
 === END STATUS ===
 
-Based on this data, create your PM report. Remember to tag team members:
-- <@${TEAM.ziad.slackId}> for Ziad (Frontend)
-- <@${TEAM.mohab.slackId}> for Mohab (Full Stack/DevOps)
-- <@${TEAM.kareem.slackId}> for Kareem (Backend)
+Based on this data, create your PM report.
 `;
 
-        // Get AI analysis (direct call, no tools)
+        // Get AI analysis with dynamic mood
         const completion = await groq.chat.completions.create({
             model: MODEL_ID,
             messages: [
-                { role: "system", content: PM_SYSTEM_PROMPT },
+                { role: "system", content: DYNAMIC_PROMPT },
                 { role: "user", content: projectContext }
             ]
         });
 
         const report = completion.choices[0].message.content || "Unable to generate report.";
-
-        // Format for Slack (convert ** to *, fix mentions)
         const formattedReport = formatForSlack(report);
 
         // Send the report to Slack
@@ -146,10 +157,6 @@ Based on this data, create your PM report. Remember to tag team members:
 
     } catch (e) {
         console.error("❌ Report Error:", e.message);
-        await slackApp.client.chat.postMessage({
-            channel: channel,
-            text: `⚠️ Report generation failed: ${e.message}`
-        });
     }
 }
 
@@ -157,7 +164,6 @@ Based on this data, create your PM report. Remember to tag team members:
  * Parse report and create Jira tasks from suggestions
  */
 async function createSuggestedTasks(report, slackApp, channel) {
-    // Look for task patterns like "@ziad: do something" or "@kareem: fix something"
     const taskPatterns = [
         { pattern: /@ziad[:\s]+([^@\n]+)/gi, member: TEAM.ziad },
         { pattern: /@mohab[:\s]+([^@\n]+)/gi, member: TEAM.mohab },
@@ -170,7 +176,6 @@ async function createSuggestedTasks(report, slackApp, channel) {
         let match;
         while ((match = pattern.exec(report)) !== null) {
             const taskText = match[1].trim();
-            // Skip if it's too short or just a placeholder
             if (taskText.length < 10 || taskText.includes('[') || taskText.toLowerCase().includes('no task')) {
                 continue;
             }
@@ -187,7 +192,6 @@ async function createSuggestedTasks(report, slackApp, channel) {
         }
     }
 
-    // Notify about created tasks
     if (createdTasks.length > 0) {
         await slackApp.client.chat.postMessage({
             channel: channel,
@@ -201,9 +205,9 @@ async function createSuggestedTasks(report, slackApp, channel) {
  * Start the scheduler for automated reports
  */
 function startScheduler(slackApp) {
-    // Every 2 days at 11:00 AM
+    // Every 2 days at 11:00 AM - Smart PM Report
     cron.schedule('0 11 */2 * *', () => generateSmartReport(slackApp));
-    console.log("📅 Scheduler started: Smart PM Reports every 2 days at 11:00 AM");
+    console.log("📅 Scheduler: Smart PM Reports every 2 days at 11:00 AM");
 }
 
 module.exports = { startScheduler, generateSmartReport };

@@ -152,8 +152,11 @@ app.message(/set report channel/i, async ({ message, say }) => {
 });
 
 // --- START ---
+const { startLife } = require('./src/agent/life');
+
 (async () => {
     await app.start();
     console.log("⚡️ Shehab V3 (Modular) is Online");
     startScheduler(app);
+    startLife(app); // Start autonomous life systems (nudges, webhooks)
 })();

@@ -127,11 +127,31 @@ async function getPullRequestDiff(prNumber) {
     }
 }
 
+/**
+ * Get raw PR data with dates for nudge system
+ */
+async function getPullRequestsRaw() {
+    try {
+        const { data } = await octokit.rest.pulls.list({ owner: OWNER, repo: REPO, state: 'open' });
+        return data.map(pr => ({
+            number: pr.number,
+            title: pr.title,
+            author: pr.user.login,
+            created_at: pr.created_at,
+            days_old: Math.floor((Date.now() - new Date(pr.created_at)) / (1000 * 60 * 60 * 24))
+        }));
+    } catch (e) {
+        console.error("GitHub Error:", e.message);
+        return [];
+    }
+}
+
 module.exports = {
     getPullRequests,
     getIssues,
     getFileTree,
     readFileContent,
     createNewFile,
-    getPullRequestDiff
+    getPullRequestDiff,
+    getPullRequestsRaw
 };

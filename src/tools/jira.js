@@ -93,4 +93,42 @@ async function getOpenJiraIssues() {
     }
 }
 
-module.exports = { createJiraTask, createJiraTaskWithAssignee, getOpenJiraIssues };
+/**
+ * Get stale Jira tickets (in Development for 5+ days)
+ */
+async function getStaleJiraTickets() {
+    try {
+        // Get tickets in "Development" or "In Progress" status
+        const jql = `project = ${PROJECT_KEY} AND status in ("Development", "In Progress") ORDER BY updated ASC`;
+        const response = await axios.get(
+            `https://${JIRA_HOST}/rest/api/2/search?jql=${encodeURIComponent(jql)}&maxResults=20`,
+            {
+                headers: {
+                    'Authorization': `Basic ${auth}`,
+                    'Accept': 'application/json'
+                }
+            }
+        );
+
+        const issues = response.data.issues || [];
+        return issues.map(issue => {
+            const updated = new Date(issue.fields.updated);
+            const daysStale = Math.floor((Date.now() - updated) / (1000 * 60 * 60 * 24));
+            return {
+                key: issue.key,
+                summary: issue.fields.summary,
+                status: issue.fields.status.name,
+                assignee: issue.fields.assignee?.displayName || 'Unassigned',
+                assigneeId: issue.fields.assignee?.accountId || null,
+                days_stale: daysStale
+            };
+        }).filter(t => t.days_stale >= 5); // Only return tickets stale 5+ days
+    } catch (e) {
+        console.error("Jira stale check error:", e.response?.status || e.message);
+        return [];
+    }
+}
+
+module.exports = { createJiraTask, createJiraTaskWithAssignee, getOpenJiraIssues, getStaleJiraTickets };
+
+
