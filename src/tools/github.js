@@ -13,10 +13,9 @@ async function getPullRequests() {
         const { data } = await octokit.rest.pulls.list({ owner: OWNER, repo: REPO, state: 'open' });
         if (!data.length) return "No open PRs.";
 
-        // Fix: Include the 'body' (Description) so Shehab doesn't search Google for it.
         return data.map(pr => {
-            const description = pr.body ? pr.body.replace(/[\r\n]+/g, ' ').substring(0, 200) : "No description.";
-            return `- [PR #${pr.number}] ${pr.title} (Author: ${pr.user.login})\n  Summary: ${description}...`;
+            const date = new Date(pr.created_at).toISOString().split('T')[0]; // YYYY-MM-DD
+            return `- [PR #${pr.number}] ${pr.title} (Author: ${pr.user.login})\n  Created: ${date}\n  Summary: ${pr.body ? pr.body.substring(0, 100).replace(/[\r\n]+/g, ' ') : "No description"}...`;
         }).join("\n\n");
     } catch (e) { return `GitHub Error: ${e.message}`; }
 }
