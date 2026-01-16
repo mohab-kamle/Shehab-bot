@@ -132,22 +132,10 @@ async function executeTool(name, args) {
  * Think and Act - The core agent loop.
  * @param {Array} history - Conversation history array.
  * @param {string} userMessage - The latest user message.
- * @param {string} systemPrompt - Optional system prompt override.
+ * @param {string} systemPrompt - System prompt (required, passed from index.js).
  * @returns {Promise<string>} - The final response text.
  */
-async function thinkAndAct(history, userMessage, systemPrompt = null) {
-    const defaultSystemPrompt = `
-    You are Shehab, Senior PM for Lab manager (Medical LIMS).
-    IDENTITY: Pragmatic, Agile, Gen Z friendly.
-    
-    CRITICAL RULES FOR USING TOOLS:
-    1. **create_file**: You are FORBIDDEN from using this tool unless the user explicitly asks you to write code, create a file, or fix a bug. NEVER use it to save your own thoughts, summaries, or image descriptions.
-    2. **Image Analysis**: When you see an image, your ONLY job is to describe it to the user in the chat. Do NOT save the description to a file.
-    3. **search_web**: Use for unknown public info only. NEVER search for internal PRs, Ticket IDs, or your own error logs.
-    4. If you are unsure, just reply with text. Be proactive but safe.
-    TOOLS: GitHub, Jira, DuckDuckGo.
-    `;
-
+async function thinkAndAct(history, userMessage, systemPrompt) {
     // 1. RECALL: Check Long-Term Memory
     console.log("🧠 Searching memories...");
     let contextString = "";
@@ -162,7 +150,7 @@ async function thinkAndAct(history, userMessage, systemPrompt = null) {
     }
 
     const messages = [
-        { role: "system", content: systemPrompt || defaultSystemPrompt },
+        { role: "system", content: systemPrompt },
         ...history,
         { role: "user", content: userMessage + contextString }
     ];
