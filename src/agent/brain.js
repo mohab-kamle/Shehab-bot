@@ -105,11 +105,11 @@ const TOOLS_DEF = [
         type: "function",
         function: {
             name: "review_pr",
-            description: "Get the code diff for a specific PR to review it for bugs, security issues, and code quality.",
+            description: "Review a Pull Request's code changes. Provide ONLY the PR number as a simple number.",
             parameters: {
                 type: "object",
                 properties: {
-                    pr_number: { type: "number", description: "The PR number to review (e.g., 35)" }
+                    pr_number: { type: "string", description: "The PR number (just the number, e.g. '60')" }
                 },
                 required: ["pr_number"]
             }
@@ -137,8 +137,13 @@ async function executeTool(name, args) {
         case "search_web":
             return await searchWeb(args.query);
         case "review_pr":
-            const diff = await getPullRequestDiff(args.pr_number);
-            return `[CODE DIFF FOR PR #${args.pr_number}]:\n${diff}\n\nINSTRUCTION: Analyze this code for 1. Bugs, 2. Security Risks (SQLi, XSS, etc), 3. Code Style issues. Be specific and reference file names and line changes.`;
+            // Extract PR number - handle various formats the LLM might send
+            let prNum = args.pr_number;
+            if (typeof prNum === 'object') prNum = prNum.pr_number || prNum.number || Object.values(prNum)[0];
+            prNum = parseInt(String(prNum).replace(/\D/g, ''), 10);
+            if (isNaN(prNum)) return "Error: Could not parse PR number. Please specify just the number, e.g., 'review PR 60'.";
+            const diff = await getPullRequestDiff(prNum);
+            return `[CODE DIFF FOR PR #${prNum}]:\n${diff}\n\nINSTRUCTION: Analyze this code for 1. Bugs, 2. Security Risks (SQLi, XSS, etc), 3. Code Style issues. Be specific and reference file names and line changes.`;
         default:
             return `Unknown tool: ${name}`;
     }
