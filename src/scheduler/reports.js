@@ -5,6 +5,7 @@ const { getPullRequests, getIssues } = require('../tools/github');
 const { createJiraTaskWithAssignee, getOpenJiraIssues } = require('../tools/jira');
 const { TEAM, PROJECT } = require('../config/team');
 const { calculateMood, getProjectStress } = require('../agent/life');
+const { reflectOnProject } = require('../agent/reflection');
 require('dotenv').config();
 
 // Direct Groq client for report generation (no tools)
@@ -97,8 +98,20 @@ async function generateSmartReport(slackApp) {
         // Count issues for mood calculation
         const issueCount = (issues.match(/\[Issue/g) || []).length;
 
-        // Calculate mood using life.js
-        const mood = calculateMood(issueCount, stalePRs, staleTickets);
+        // Run Semantic Reflection (Get "Subconscious" Thoughts)
+        const reflection = await reflectOnProject();
+        const deepInsight = reflection?.internal_thought || "No deep insight available.";
+
+        // Calculate mood using life.js (Pass reflection mood if available)
+        let mood = calculateMood(issueCount, stalePRs, staleTickets);
+        if (reflection && reflection.mood_update) {
+            // Override or influence mood based on semantic analysis
+            console.log(`🧠 Semantic Analysis Override: Mood changed to ${reflection.mood_update}`);
+            // Simple mapping for now, can be expanded
+            if (reflection.mood_update === 'celebratory') mood = { level: 'happy', emoji: '🎉', prompt: mood.prompt };
+            if (reflection.mood_update === 'worried') mood = { level: 'stressed', emoji: '😰', prompt: mood.prompt };
+        }
+
         console.log(`🎭 Mood: ${mood.level} ${mood.emoji} (Issues: ${issueCount}, Stale PRs: ${stalePRs}, Stale Tickets: ${staleTickets})`);
 
         // Dynamic prompt with mood
@@ -128,7 +141,12 @@ STALE ITEMS (needs attention):
 
 === END STATUS ===
 
-Based on this data, create your PM report.
+=== END STATUS ===
+
+=== DEEP SEMANTIC INSIGHT (From your subconscious) ===
+"${deepInsight}"
+
+Based on ALL this data, create your PM report. Start with the Semantic Insight as your 'PM Notes'.
 `;
 
         // Get AI analysis with dynamic mood

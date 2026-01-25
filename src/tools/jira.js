@@ -78,7 +78,7 @@ async function getOpenJiraIssues() {
     try {
         const jql = `project = ${PROJECT_KEY} AND status != Done ORDER BY created DESC`;
         const response = await axios.get(
-            `https://${JIRA_HOST}/rest/api/2/search?jql=${encodeURIComponent(jql)}&maxResults=20`,
+            `https://${JIRA_HOST}/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&maxResults=20&fields=summary,status,assignee,created,updated`,
             {
                 headers: {
                     'Authorization': `Basic ${auth}`,
@@ -101,7 +101,7 @@ async function getStaleJiraTickets() {
         // Get tickets in "Development" or "In Progress" status
         const jql = `project = ${PROJECT_KEY} AND status in ("Development", "In Progress") ORDER BY updated ASC`;
         const response = await axios.get(
-            `https://${JIRA_HOST}/rest/api/2/search?jql=${encodeURIComponent(jql)}&maxResults=20`,
+            `https://${JIRA_HOST}/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&maxResults=20&fields=summary,status,assignee,created,updated`,
             {
                 headers: {
                     'Authorization': `Basic ${auth}`,

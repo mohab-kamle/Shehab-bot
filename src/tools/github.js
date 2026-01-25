@@ -146,6 +146,54 @@ async function getPullRequestsRaw() {
     }
 }
 
+/**
+ * Get recent commits from the default branch
+ * @param {number} limit 
+ */
+async function getRecentCommits(limit = 5) {
+    try {
+        const { data } = await octokit.rest.repos.listCommits({
+            owner: OWNER,
+            repo: REPO,
+            per_page: limit
+        });
+
+        return data.map(commit => ({
+            sha: commit.sha,
+            message: commit.commit.message,
+            author: commit.commit.author.name,
+            date: commit.commit.author.date
+        }));
+    } catch (e) {
+        console.error("GitHub Commit Error:", e.message);
+        return [];
+    }
+}
+
+/**
+ * Get diff for a specific commit
+ * @param {string} commitSha 
+ */
+async function getCommitDiff(commitSha) {
+    try {
+        const { data } = await octokit.rest.repos.getCommit({
+            owner: OWNER,
+            repo: REPO,
+            ref: commitSha,
+            mediaType: {
+                format: "diff"
+            }
+        });
+
+        if (data.length > 10000) {
+            return `[diff truncated] ${data.substring(0, 10000)}...`;
+        }
+        return data;
+    } catch (e) {
+        return `Error getting diff: ${e.message}`;
+    }
+}
+
 module.exports = {
     getPullRequests,
     getIssues,
@@ -153,5 +201,8 @@ module.exports = {
     readFileContent,
     createNewFile,
     getPullRequestDiff,
-    getPullRequestsRaw
+    getPullRequestDiff,
+    getPullRequestsRaw,
+    getRecentCommits,
+    getCommitDiff
 };

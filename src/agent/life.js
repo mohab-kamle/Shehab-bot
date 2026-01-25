@@ -12,6 +12,7 @@ const express = require('express');
 const memory = require('../utils/memory');
 const { getPullRequestsRaw } = require('../tools/github');
 const { getStaleJiraTickets } = require('../tools/jira');
+const { reflectOnProject } = require('./reflection');
 const { TEAM, PROJECT } = require('../config/team');
 
 // ============================================
@@ -176,6 +177,22 @@ async function checkStaleWork(slackApp) {
 }
 
 /**
+ * Execute the autonomous reflection cycle and utilize the output.
+ */
+async function runReflection(slackApp) {
+    const channel = memory.get('report_channel');
+    if (!channel) return;
+
+    const thought = await reflectOnProject();
+    if (thought && thought.public_status) {
+        await slackApp.client.chat.postMessage({
+            channel: channel,
+            text: `💭 *Shehab's Thought of the Day:*\n${thought.public_status}`
+        });
+    }
+}
+
+/**
  * Find team member by GitHub username
  */
 function findTeamMemberByGitHub(githubUsername) {
@@ -267,6 +284,10 @@ function startLife(slackApp) {
     cron.schedule('0 14 * * *', () => checkStaleWork(slackApp));
     console.log("💓 Life: Stale work nudges scheduled for 2:00 PM daily");
 
+    // Daily Reflection at 10:00 AM
+    cron.schedule('0 10 * * *', () => runReflection(slackApp));
+    console.log("🧠 Life: Daily semantic reflection scheduled for 10:00 AM");
+
     // Start webhook server on port 3001
     const webhookServer = createWebhookServer(slackApp);
     webhookServer.listen(3001, () => {
@@ -282,5 +303,6 @@ module.exports = {
     checkStaleWork,
     createWebhookServer,
     startLife,
+    runReflection,
     findTeamMemberByGitHub
 };

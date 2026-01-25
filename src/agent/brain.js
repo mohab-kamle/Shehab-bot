@@ -2,7 +2,7 @@ require('dotenv').config();
 const OpenAI = require("openai");
 
 // Import our tools
-const { getPullRequests, getIssues, getFileTree, readFileContent, createNewFile, getPullRequestDiff } = require('../tools/github');
+const { getPullRequests, getIssues, getFileTree, readFileContent, createNewFile, getPullRequestDiff, getRecentCommits, getCommitDiff } = require('../tools/github');
 const { createJiraTask } = require('../tools/jira');
 const { searchWeb } = require('../tools/web');
 
@@ -114,6 +114,33 @@ const TOOLS_DEF = [
                 required: ["pr_number"]
             }
         }
+    },
+    {
+        type: "function",
+        function: {
+            name: "get_commits",
+            description: "Get a list of recent commits to see what has been changing in the code.",
+            parameters: {
+                type: "object",
+                properties: {
+                    limit: { type: "number", description: "Number of commits to fetch (default 5)" }
+                }
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "get_commit_diff",
+            description: "Get the code diff of a specific commit to see the changes.",
+            parameters: {
+                type: "object",
+                properties: {
+                    sha: { type: "string", description: "The commit SHA" }
+                },
+                required: ["sha"]
+            }
+        }
     }
 ];
 
@@ -144,6 +171,11 @@ async function executeTool(name, args) {
             if (isNaN(prNum)) return "Error: Could not parse PR number. Please specify just the number, e.g., 'review PR 60'.";
             const diff = await getPullRequestDiff(prNum);
             return `[CODE DIFF FOR PR #${prNum}]:\n${diff}\n\nINSTRUCTION: Analyze this code for 1. Bugs, 2. Security Risks (SQLi, XSS, etc), 3. Code Style issues. Be specific and reference file names and line changes.`;
+        case "get_commits":
+            const commits = await getRecentCommits(args.limit || 5);
+            return JSON.stringify(commits, null, 2);
+        case "get_commit_diff":
+            return await getCommitDiff(args.sha);
         default:
             return `Unknown tool: ${name}`;
     }
